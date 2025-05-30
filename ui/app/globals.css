@@ -19,7 +19,20 @@ body {
       > figure img {
           height: 100%;
           object-fit: cover;
-          filter: brightness(80%); /* Much lighter - try 60-80% */
+          filter: brightness(80%);
       }
   }
+}
+.card {
+  &.image-full.dark {
+      > figure img {
+          height: 100%;
+          object-fit: cover;
+          filter: brightness(50%);
+      }
+  }
+}
+
+.btn-success:hover {
+  color: #fff;
 }

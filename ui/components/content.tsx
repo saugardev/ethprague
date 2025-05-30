@@ -1,19 +1,21 @@
 import Image from "next/image";
+import Link from "next/link";
 
 export default function Content() {
   return (
     <div className="flex mt-10 gap-5 justify-center items-center">
-      <div className="card image-full w-72 shadow-sm">
+      <div className="card image-full w-72 h-80 shadow-sm">
         <figure>
           <img
             src="/touch-grass.png"
-            alt="Shoes" />
+            alt="Shoes"
+            className="w-full h-full object-cover" />
         </figure>
         <div className="card-body">
-          <h2 className="card-title">Track your progress</h2>
-          <p>You can set targets and proof your progress with Grass.</p>
+          <h2 className="card-title">Share your progress</h2>
+          <p>You can share your targets and proof your progress with Grass.</p>
           <div className="card-actions justify-end">
-            <button className="btn btn-success btn-soft">Grass up!</button>
+            <Link href="/social/" className="btn btn-success btn-soft">Grass up!</Link>
           </div>
         </div>
       </div>
