@@ -11,9 +11,9 @@ export default function Navbar() {
         </Link>
 
         <div className="flex gap-10">
-          <Link href="/" className="btn btn-ghost">Social</Link>
-          <Link href="/about" className="btn btn-ghost">Train</Link>
-          <Link href="/contact" className="btn btn-ghost">Health</Link>
+          <Link href="/social" className="btn btn-ghost">Social</Link>
+          <Link href="/train" className="btn btn-ghost">Train</Link>
+          <Link href="/health" className="btn btn-ghost">Health</Link>
         </div>
 
         <div className="w-32">

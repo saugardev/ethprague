@@ -3,9 +3,12 @@ import Content from "@/components/content";
 
 export default function Home() {
   return (
-    <div className="max-w-4xl mx-auto py-4">
-      <Hero />
+    <>
+      <Hero 
+        title="Create healthy habits and verify your progress"
+        subtitle="Track, improve and proof your health with Grass."
+      />
       <Content />
-    </div>
+    </>
   );
 }

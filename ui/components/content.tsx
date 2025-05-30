@@ -29,7 +29,7 @@ export default function Content() {
           </div>
         </div>
         <div className="text-right mt-auto leading-tight text-xs absolute -bottom-10 right-2">
-          Built with <br /><span className="text-success underline font-bold">Love</span>
+          Built with <br /><span className="text-success underline font-bold">vlayer</span>
         </div>
       </div>
     </div>
