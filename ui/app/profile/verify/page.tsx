@@ -14,8 +14,8 @@ import {
 import { useAccount, useWriteContract, useReadContract } from "wagmi";
 import { Abi } from "viem";
 import { sepolia } from "viem/chains";
-import webProofVerifier from "../../../contracts/out/WebProofVerifier.sol/WebProofVerifier.json";
-import webProofProver from "../../../contracts/out/WebProofProver.sol/WebProofProver.json";
+import webProofVerifier from "../../../../contracts/out/WebProofVerifier.sol/WebProofVerifier.json";
+import webProofProver from "../../../../contracts/out/WebProofProver.sol/WebProofProver.json";
 
 // Prover contract ABI
 const proverAbi = webProofProver.abi as Abi;
