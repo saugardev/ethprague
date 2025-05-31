@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   createExtensionWebProofProvider,
   createVlayerClient,
@@ -11,7 +11,7 @@ import {
   expectUrl,
   notarize,
 } from "@vlayer/sdk/web_proof";
-import { useAccount, useWriteContract, useReadContract } from "wagmi";
+import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt } from "wagmi";
 import { Abi } from "viem";
 import { sepolia } from "viem/chains";
 import webProofVerifier from "../../../../contracts/out/WebProofVerifier.sol/WebProofVerifier.json";
@@ -112,6 +112,7 @@ export default function WebProofPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [proofHash, setProofHash] = useState<string | null>(null);
+  const [profileTxHash, setProfileTxHash] = useState<`0x${string}` | null>(null);
   const [selectedMetric, setSelectedMetric] = useState(fitnessMetrics[0]);
   const [endDate, setEndDate] = useState("2025-05-31");
   const [isFitnessLoading, setIsFitnessLoading] = useState(false);
@@ -136,7 +137,12 @@ export default function WebProofPage() {
 
   const { writeContract, isPending: isWritePending } = useWriteContract();
 
-  const { data: username } = useReadContract({
+  // Watch for profile verification transaction confirmation
+  const { isSuccess: isProfileTxSuccess } = useWaitForTransactionReceipt({
+    hash: profileTxHash || undefined,
+  });
+
+  const { data: username, refetch: refetchUsername } = useReadContract({
     address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
     abi: verifierAbi,
     functionName: "getUsername",
@@ -144,7 +150,15 @@ export default function WebProofPage() {
     query: {
       enabled: !!address,
     },
-  }) as { data: string | undefined };
+  }) as { data: string | undefined; refetch: () => void };
+
+  // Refetch username when profile verification transaction is confirmed
+  useEffect(() => {
+    if (isProfileTxSuccess && profileTxHash) {
+      refetchUsername();
+      setProfileTxHash(null); // Reset after successful refetch
+    }
+  }, [isProfileTxSuccess, profileTxHash, refetchUsername]);
 
   const { data: userFitnessData } = useReadContract({
     address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
@@ -154,6 +168,7 @@ export default function WebProofPage() {
     query: {
       enabled: !!address && !!username,
     },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
   }) as { data: any };
 
   const handleGenerateProof = async () => {
@@ -233,6 +248,7 @@ export default function WebProofPage() {
           onSuccess: (txHash) => {
             console.log("Transaction successful:", txHash);
             setProofHash(txHash);
+            setProfileTxHash(txHash);
           },
           onError: (error) => {
             console.error("Transaction failed:", error);
