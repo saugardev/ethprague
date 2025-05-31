@@ -250,7 +250,6 @@ export default function Health() {
         <button 
           onClick={() => setIsModalOpen(true)}
           className="card image-full dark w-72 h-80 shadow-sm hover:shadow-lg transition-shadow cursor-pointer"
-          disabled={!isConnected}
         >
           <figure>
             <img
@@ -435,7 +434,9 @@ export default function Health() {
                       : "btn-success"
                   }`}
                 >
-                  {isStressLoading
+                  {!isConnected
+                    ? "Connect Wallet to Continue"
+                    : isStressLoading
                     ? "Generating Stress Level Proof..."
                     : isWritePending
                     ? "Waiting for Transaction..."
