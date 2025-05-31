@@ -15,7 +15,7 @@ export default function Content() {
           <h2 className="card-title">Share your progress</h2>
           <p>You can share your targets and proof your progress with Grass.</p>
           <div className="card-actions justify-end">
-            <Link href="/social/" className="btn btn-success btn-soft">Grass up!</Link>
+            <Link href="/social/groups" className="btn btn-success btn-soft">Grass up!</Link>
           </div>
         </div>
       </div>
