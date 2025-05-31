@@ -1,7 +1,14 @@
+'use client'
+
 import Link from "next/link";
 import Image from "next/image";
+import { useAppKit } from '@reown/appkit/react'
+import { useAccount } from 'wagmi'
 
 export default function Navbar() {
+  const { open } = useAppKit()
+  const { address, isConnected } = useAccount()
+
   return (
     <div className="max-w-3xl mx-auto py-4 w-full">
       <div className="flex justify-between items-center">
@@ -17,7 +24,12 @@ export default function Navbar() {
         </div>
 
         <div className="w-32">
-          <button className="btn btn-success btn-soft">Touch Grass</button>
+          <button 
+            onClick={() => open()}
+            className="btn btn-success btn-soft"
+          >
+            {isConnected ? `${address?.slice(0, 6)}...` : 'Touch Grass'}
+          </button>
         </div>
       </div>
     </div>
