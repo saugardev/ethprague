@@ -1,7 +1,7 @@
 "use client";
 
 import Hero from "@/components/hero";
-import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
 import { Abi } from "viem";
 import { sepolia } from "viem/chains";
 import { useState, useEffect } from "react";
@@ -29,6 +29,7 @@ export default function Health() {
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileProofHash, setProfileProofHash] = useState<string | null>(null);
+  const [profileTxHash, setProfileTxHash] = useState<`0x${string}` | null>(null);
   
   // Stress level verification states
   const [isStressLoading, setIsStressLoading] = useState(false);
@@ -39,7 +40,12 @@ export default function Health() {
 
   const { writeContract, isPending: isWritePending } = useWriteContract();
 
-  const { data: username } = useReadContract({
+  // Watch for profile verification transaction confirmation
+  const { isSuccess: isProfileTxSuccess } = useWaitForTransactionReceipt({
+    hash: profileTxHash || undefined,
+  });
+
+  const { data: username, refetch: refetchUsername } = useReadContract({
     address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
     abi: verifierAbi,
     functionName: "getUsername",
@@ -47,7 +53,7 @@ export default function Health() {
     query: {
       enabled: !!address,
     },
-  }) as { data: string | undefined };
+  }) as { data: string | undefined; refetch: () => void };
 
   const isProfileVerified = username && username.length > 0;
 
@@ -57,6 +63,14 @@ export default function Health() {
       setUserDisplayName(username);
     }
   }, [isProfileVerified, username]);
+
+  // Refetch username when profile verification transaction is confirmed
+  useEffect(() => {
+    if (isProfileTxSuccess && profileTxHash) {
+      refetchUsername();
+      setProfileTxHash(null); // Reset after successful refetch
+    }
+  }, [isProfileTxSuccess, profileTxHash, refetchUsername]);
 
   const handleGenerateProfileProof = async () => {
     if (!address) {
@@ -128,6 +142,7 @@ export default function Health() {
         {
           onSuccess: (txHash) => {
             setProfileProofHash(txHash);
+            setProfileTxHash(txHash);
           },
           onError: (error) => {
             setProfileError(error.message);
