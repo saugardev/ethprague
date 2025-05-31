@@ -14,7 +14,6 @@ contract WebProofVerifier is Verifier {
     // NOTA: Los valores decimales están preservados usando JSON_GET_FLOAT_AS_INT con precisión 3
     // Por ejemplo: 146.293 se almacena como 146293 (multiplicado por 1000)
     struct UserFitnessData {
-        uint256 userId;
         address userAddress;
         string username;
         uint256 countOfActivities;        // número entero de actividades
@@ -34,21 +33,62 @@ contract WebProofVerifier is Verifier {
         uint256 lastUpdated;              // timestamp de última actualización
     }
     
-    // Mapping de userId a datos de fitness
-    mapping(uint256 => UserFitnessData) public userFitnessData;
+    // Enum para el estado de las apuestas
+    enum BetStatus {
+        Active,      // Apuesta activa, aún se puede apostar
+        Closed,      // Apuesta cerrada, no se puede apostar más
+        Resolved     // Apuesta resuelta, se pueden reclamar ganancias
+    }
     
-    // Mapping de address a userId para facilitar búsquedas
-    mapping(address => uint256) public addressToUserId;
+    // Struct para las apuestas de pasos diarios
+    struct StepsBet {
+        uint256 betId;                    // ID único de la apuesta
+        address creator;                  // Usuario que creó la apuesta
+        string targetDate;                // Fecha objetivo (YYYY-MM-DD)
+        uint256 minimumSteps;             // Mínimo de pasos para ganar
+        uint256 totalPoolFor;             // Total apostado a favor
+        uint256 totalPoolAgainst;         // Total apostado en contra
+        BetStatus status;                 // Estado de la apuesta
+        bool goalAchieved;                // Si se logró el objetivo (solo válido cuando status == Resolved)
+        uint256 actualSteps;              // Pasos reales del día (solo válido cuando status == Resolved)
+        uint256 createdAt;                // Timestamp de creación
+        uint256 closedAt;                 // Timestamp de cierre (cuando ya no se puede apostar)
+        uint256 resolvedAt;               // Timestamp de resolución
+    }
     
-    // Mapping de userId a datos de resumen diario por fecha
-    // userId => (calendarDate => DailySummaryData)
-    mapping(uint256 => mapping(string => DailySummaryData)) public userDailySummaryData;
+    // Struct para las apuestas individuales de los usuarios
+    struct UserBet {
+        uint256 betId;                    // ID de la apuesta
+        address bettor;                   // Usuario que apostó
+        uint256 amount;                   // Cantidad apostada
+        bool bettingFor;                  // true = a favor, false = en contra
+        bool claimed;                     // Si ya reclamó las ganancias
+    }
+    
+    // Mapping de address a datos de fitness
+    mapping(address => UserFitnessData) public userFitnessData;
+    
+    // Mapping de address a datos de resumen diario por fecha
+    // address => (calendarDate => DailySummaryData)
+    mapping(address => mapping(string => DailySummaryData)) public userDailySummaryData;
     
     // Mapping para trackear qué fechas tiene cada usuario
-    mapping(uint256 => string[]) public userDates;
+    mapping(address => string[]) public userDates;
     
-    // Contador para generar userIds únicos
-    uint256 public nextUserId = 1;
+    // Mappings para las apuestas
+    mapping(uint256 => StepsBet) public stepsBets;           // betId => StepsBet
+    mapping(uint256 => UserBet[]) public betParticipants;    // betId => array de UserBet
+    mapping(address => uint256[]) public userBetIds;         // user => array de betIds donde participó
+    
+    uint256 public nextBetId = 1;                            // Contador para IDs de apuestas
+    uint256[] public activeBetIds;                           // Array de IDs de apuestas activas
+    
+    // Events para las apuestas
+    event StepsBetCreated(uint256 indexed betId, address indexed creator, string targetDate, uint256 minimumSteps);
+    event BetPlaced(uint256 indexed betId, address indexed bettor, uint256 amount, bool bettingFor);
+    event BetClosed(uint256 indexed betId);
+    event BetResolved(uint256 indexed betId, bool goalAchieved, uint256 actualSteps);
+    event WinningsClaimed(uint256 indexed betId, address indexed winner, uint256 amount);
 
     constructor(address _prover) {
         prover = _prover;
@@ -61,14 +101,9 @@ contract WebProofVerifier is Verifier {
         require(bytes(addressToUsername[account]).length == 0, "Address already has a username");
         addressToUsername[account] = username;
         
-        // Asignar userId si no existe
-        if (addressToUserId[account] == 0) {
-            addressToUserId[account] = nextUserId;
-            userFitnessData[nextUserId].userId = nextUserId;
-            userFitnessData[nextUserId].userAddress = account;
-            userFitnessData[nextUserId].username = username;
-            nextUserId++;
-        }
+        // Initialize user fitness data
+        userFitnessData[account].userAddress = account;
+        userFitnessData[account].username = username;
     }
 
     function verifyCountOfActivities(
@@ -79,10 +114,9 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getCountOfActivities.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
-        userFitnessData[userId].countOfActivities = countOfActivities;
-        userFitnessData[userId].lastUpdated = block.timestamp;
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
+        userFitnessData[account].countOfActivities = countOfActivities;
+        userFitnessData[account].lastUpdated = block.timestamp;
     }
 
     function verifyTotalDistance(
@@ -93,10 +127,9 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getTotalDistance.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
-        userFitnessData[userId].totalDistance = totalDistance;
-        userFitnessData[userId].lastUpdated = block.timestamp;
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
+        userFitnessData[account].totalDistance = totalDistance;
+        userFitnessData[account].lastUpdated = block.timestamp;
     }
 
     function verifyTotalCalories(
@@ -107,10 +140,9 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getTotalCalories.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
-        userFitnessData[userId].totalCalories = totalCalories;
-        userFitnessData[userId].lastUpdated = block.timestamp;
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
+        userFitnessData[account].totalCalories = totalCalories;
+        userFitnessData[account].lastUpdated = block.timestamp;
     }
 
     function verifyAvgHeartRate(
@@ -121,10 +153,9 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getAvgHeartRate.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
-        userFitnessData[userId].avgHeartRate = avgHeartRate;
-        userFitnessData[userId].lastUpdated = block.timestamp;
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
+        userFitnessData[account].avgHeartRate = avgHeartRate;
+        userFitnessData[account].lastUpdated = block.timestamp;
     }
 
     function verifyDailySteps(
@@ -136,15 +167,14 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getDailySteps.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
         
         // Check if this is a new date for this user
-        bool isNewDate = userDailySummaryData[userId][calendarDate].lastUpdated == 0;
+        bool isNewDate = userDailySummaryData[account][calendarDate].lastUpdated == 0;
         
         // Initialize or update the daily summary data
         if (isNewDate) {
-            userDailySummaryData[userId][calendarDate] = DailySummaryData({
+            userDailySummaryData[account][calendarDate] = DailySummaryData({
                 totalSteps: totalSteps,
                 averageStressLevel: 0,
                 totalDistanceMeters: 0,
@@ -152,10 +182,10 @@ contract WebProofVerifier is Verifier {
                 calendarDate: calendarDate,
                 lastUpdated: block.timestamp
             });
-            userDates[userId].push(calendarDate);
+            userDates[account].push(calendarDate);
         } else {
-            userDailySummaryData[userId][calendarDate].totalSteps = totalSteps;
-            userDailySummaryData[userId][calendarDate].lastUpdated = block.timestamp;
+            userDailySummaryData[account][calendarDate].totalSteps = totalSteps;
+            userDailySummaryData[account][calendarDate].lastUpdated = block.timestamp;
         }
     }
 
@@ -168,15 +198,14 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getDailyAverageStress.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
         
         // Check if this is a new date for this user
-        bool isNewDate = userDailySummaryData[userId][calendarDate].lastUpdated == 0;
+        bool isNewDate = userDailySummaryData[account][calendarDate].lastUpdated == 0;
         
         // Initialize or update the daily summary data
         if (isNewDate) {
-            userDailySummaryData[userId][calendarDate] = DailySummaryData({
+            userDailySummaryData[account][calendarDate] = DailySummaryData({
                 totalSteps: 0,
                 averageStressLevel: averageStressLevel,
                 totalDistanceMeters: 0,
@@ -184,10 +213,10 @@ contract WebProofVerifier is Verifier {
                 calendarDate: calendarDate,
                 lastUpdated: block.timestamp
             });
-            userDates[userId].push(calendarDate);
+            userDates[account].push(calendarDate);
         } else {
-            userDailySummaryData[userId][calendarDate].averageStressLevel = averageStressLevel;
-            userDailySummaryData[userId][calendarDate].lastUpdated = block.timestamp;
+            userDailySummaryData[account][calendarDate].averageStressLevel = averageStressLevel;
+            userDailySummaryData[account][calendarDate].lastUpdated = block.timestamp;
         }
     }
 
@@ -200,15 +229,14 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getDailyDistance.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
         
         // Check if this is a new date for this user
-        bool isNewDate = userDailySummaryData[userId][calendarDate].lastUpdated == 0;
+        bool isNewDate = userDailySummaryData[account][calendarDate].lastUpdated == 0;
         
         // Initialize or update the daily summary data
         if (isNewDate) {
-            userDailySummaryData[userId][calendarDate] = DailySummaryData({
+            userDailySummaryData[account][calendarDate] = DailySummaryData({
                 totalSteps: 0,
                 averageStressLevel: 0,
                 totalDistanceMeters: totalDistanceMeters,
@@ -216,10 +244,10 @@ contract WebProofVerifier is Verifier {
                 calendarDate: calendarDate,
                 lastUpdated: block.timestamp
             });
-            userDates[userId].push(calendarDate);
+            userDates[account].push(calendarDate);
         } else {
-            userDailySummaryData[userId][calendarDate].totalDistanceMeters = totalDistanceMeters;
-            userDailySummaryData[userId][calendarDate].lastUpdated = block.timestamp;
+            userDailySummaryData[account][calendarDate].totalDistanceMeters = totalDistanceMeters;
+            userDailySummaryData[account][calendarDate].lastUpdated = block.timestamp;
         }
     }
 
@@ -232,15 +260,14 @@ contract WebProofVerifier is Verifier {
         public
         onlyVerified(prover, WebProofProver.getDailyRestingHeartRate.selector)
     {
-        require(addressToUserId[account] != 0, "User must be registered first");
-        uint256 userId = addressToUserId[account];
+        require(bytes(addressToUsername[account]).length != 0, "User must be registered first");
         
         // Check if this is a new date for this user
-        bool isNewDate = userDailySummaryData[userId][calendarDate].lastUpdated == 0;
+        bool isNewDate = userDailySummaryData[account][calendarDate].lastUpdated == 0;
         
         // Initialize or update the daily summary data
         if (isNewDate) {
-            userDailySummaryData[userId][calendarDate] = DailySummaryData({
+            userDailySummaryData[account][calendarDate] = DailySummaryData({
                 totalSteps: 0,
                 averageStressLevel: 0,
                 totalDistanceMeters: 0,
@@ -248,67 +275,284 @@ contract WebProofVerifier is Verifier {
                 calendarDate: calendarDate,
                 lastUpdated: block.timestamp
             });
-            userDates[userId].push(calendarDate);
+            userDates[account].push(calendarDate);
         } else {
-            userDailySummaryData[userId][calendarDate].restingHeartRate = restingHeartRate;
-            userDailySummaryData[userId][calendarDate].lastUpdated = block.timestamp;
+            userDailySummaryData[account][calendarDate].restingHeartRate = restingHeartRate;
+            userDailySummaryData[account][calendarDate].lastUpdated = block.timestamp;
         }
     }
 
+    // ========== FUNCIONES DE APUESTAS ==========
+    
+    /**
+     * @dev Crea una nueva apuesta de pasos diarios
+     * @param targetDate Fecha objetivo en formato YYYY-MM-DD
+     * @param minimumSteps Mínimo de pasos para ganar la apuesta
+     */
+    function createStepsBet(
+        string calldata targetDate,
+        uint256 minimumSteps
+    ) external payable {
+        require(bytes(addressToUsername[msg.sender]).length != 0, "User must be registered first");
+        require(minimumSteps > 0, "Minimum steps must be greater than 0");
+        require(msg.value > 0, "Must send ETH to create bet");
+        
+        // Verificar que la fecha sea futura (simplificado, asumimos formato correcto)
+        // En una implementación real, se debería validar el formato de fecha
+        
+        uint256 betId = nextBetId++;
+        
+        stepsBets[betId] = StepsBet({
+            betId: betId,
+            creator: msg.sender,
+            targetDate: targetDate,
+            minimumSteps: minimumSteps,
+            totalPoolFor: msg.value,
+            totalPoolAgainst: 0,
+            status: BetStatus.Active,
+            goalAchieved: false,
+            actualSteps: 0,
+            createdAt: block.timestamp,
+            closedAt: 0,
+            resolvedAt: 0
+        });
+        
+        // El creador apuesta a favor por defecto
+        betParticipants[betId].push(UserBet({
+            betId: betId,
+            bettor: msg.sender,
+            amount: msg.value,
+            bettingFor: true,
+            claimed: false
+        }));
+        
+        userBetIds[msg.sender].push(betId);
+        activeBetIds.push(betId);
+        
+        emit StepsBetCreated(betId, msg.sender, targetDate, minimumSteps);
+        emit BetPlaced(betId, msg.sender, msg.value, true);
+    }
+    
+    /**
+     * @dev Permite a los usuarios apostar a favor o en contra de una apuesta existente
+     * @param betId ID de la apuesta
+     * @param bettingFor true para apostar a favor, false para apostar en contra
+     */
+    function placeBet(uint256 betId, bool bettingFor) external payable {
+        require(msg.value > 0, "Must send ETH to place bet");
+        require(stepsBets[betId].status == BetStatus.Active, "Bet is not active");
+        require(stepsBets[betId].creator != address(0), "Bet does not exist");
+        
+        // Actualizar el pool correspondiente
+        if (bettingFor) {
+            stepsBets[betId].totalPoolFor += msg.value;
+        } else {
+            stepsBets[betId].totalPoolAgainst += msg.value;
+        }
+        
+        // Registrar la apuesta del usuario
+        betParticipants[betId].push(UserBet({
+            betId: betId,
+            bettor: msg.sender,
+            amount: msg.value,
+            bettingFor: bettingFor,
+            claimed: false
+        }));
+        
+        userBetIds[msg.sender].push(betId);
+        
+        emit BetPlaced(betId, msg.sender, msg.value, bettingFor);
+    }
+    
+    /**
+     * @dev Cierra una apuesta para que no se puedan hacer más apuestas
+     * @param betId ID de la apuesta
+     */
+    function closeBet(uint256 betId) external {
+        require(stepsBets[betId].creator == msg.sender, "Only creator can close bet");
+        require(stepsBets[betId].status == BetStatus.Active, "Bet is not active");
+        
+        stepsBets[betId].status = BetStatus.Closed;
+        stepsBets[betId].closedAt = block.timestamp;
+        
+        // Remover de apuestas activas
+        _removeFromActiveBets(betId);
+        
+        emit BetClosed(betId);
+    }
+    
+    /**
+     * @dev Resuelve una apuesta usando los datos verificados de pasos diarios
+     * @param betId ID de la apuesta
+     */
+    function resolveBet(uint256 betId) external {
+        StepsBet storage bet = stepsBets[betId];
+        require(bet.creator != address(0), "Bet does not exist");
+        require(bet.status == BetStatus.Closed, "Bet must be closed first");
+        
+        // Verificar que existan datos para la fecha objetivo
+        DailySummaryData memory dailyData = userDailySummaryData[bet.creator][bet.targetDate];
+        require(dailyData.lastUpdated != 0, "No verified data for target date");
+        
+        // Determinar si se logró el objetivo
+        bool goalAchieved = dailyData.totalSteps >= bet.minimumSteps;
+        
+        bet.status = BetStatus.Resolved;
+        bet.goalAchieved = goalAchieved;
+        bet.actualSteps = dailyData.totalSteps;
+        bet.resolvedAt = block.timestamp;
+        
+        emit BetResolved(betId, goalAchieved, dailyData.totalSteps);
+    }
+    
+    /**
+     * @dev Permite a los ganadores reclamar sus ganancias
+     * @param betId ID de la apuesta
+     */
+    function claimWinnings(uint256 betId) external {
+        require(stepsBets[betId].status == BetStatus.Resolved, "Bet not resolved yet");
+        
+        UserBet[] storage participants = betParticipants[betId];
+        StepsBet memory bet = stepsBets[betId];
+        
+        uint256 userWinnings = 0;
+        bool userParticipated = false;
+        
+        // Calcular las ganancias del usuario
+        for (uint256 i = 0; i < participants.length; i++) {
+            if (participants[i].bettor == msg.sender && !participants[i].claimed) {
+                userParticipated = true;
+                
+                // Verificar si el usuario ganó
+                bool userWon = (participants[i].bettingFor && bet.goalAchieved) || 
+                              (!participants[i].bettingFor && !bet.goalAchieved);
+                
+                if (userWon) {
+                    uint256 winningPool = bet.goalAchieved ? bet.totalPoolFor : bet.totalPoolAgainst;
+                    uint256 losingPool = bet.goalAchieved ? bet.totalPoolAgainst : bet.totalPoolFor;
+                    
+                    // Calcular proporción de ganancias
+                    if (winningPool > 0) {
+                        uint256 userShare = (participants[i].amount * losingPool) / winningPool;
+                        userWinnings += participants[i].amount + userShare;
+                    }
+                }
+                
+                participants[i].claimed = true;
+            }
+        }
+        
+        require(userParticipated, "User did not participate in this bet");
+        
+        if (userWinnings > 0) {
+            payable(msg.sender).transfer(userWinnings);
+            emit WinningsClaimed(betId, msg.sender, userWinnings);
+        }
+    }
+    
+    // ========== FUNCIONES DE CONSULTA ==========
+    
     function getUsername(address account) public view returns (string memory) {
         return addressToUsername[account];
     }
     
-    function getUserFitnessData(uint256 userId) public view returns (UserFitnessData memory) {
-        require(userFitnessData[userId].userId != 0, "User fitness data not found");
-        return userFitnessData[userId];
+    function getUserFitnessData(address account) public view returns (UserFitnessData memory) {
+        require(bytes(addressToUsername[account]).length != 0, "User not registered");
+        return userFitnessData[account];
     }
     
-    function getUserFitnessDataByAddress(address account) public view returns (UserFitnessData memory) {
-        uint256 userId = addressToUserId[account];
-        require(userId != 0, "User not registered");
-        return getUserFitnessData(userId);
+    function getDailySummaryData(address account, string memory calendarDate) public view returns (DailySummaryData memory) {
+        require(userDailySummaryData[account][calendarDate].lastUpdated != 0, "Daily summary data not found");
+        return userDailySummaryData[account][calendarDate];
     }
     
-    function getUserId(address account) public view returns (uint256) {
-        return addressToUserId[account];
+    function getUserDates(address account) public view returns (string[] memory) {
+        return userDates[account];
     }
     
-    function getDailySummaryData(uint256 userId, string memory calendarDate) public view returns (DailySummaryData memory) {
-        require(userDailySummaryData[userId][calendarDate].lastUpdated != 0, "Daily summary data not found");
-        return userDailySummaryData[userId][calendarDate];
-    }
-    
-    function getDailySummaryDataByAddress(address account, string memory calendarDate) public view returns (DailySummaryData memory) {
-        uint256 userId = addressToUserId[account];
-        require(userId != 0, "User not registered");
-        return getDailySummaryData(userId, calendarDate);
-    }
-    
-    function getUserDates(uint256 userId) public view returns (string[] memory) {
-        return userDates[userId];
-    }
-    
-    function getUserDatesByAddress(address account) public view returns (string[] memory) {
-        uint256 userId = addressToUserId[account];
-        require(userId != 0, "User not registered");
-        return getUserDates(userId);
-    }
-    
-    function getAllDailySummariesByUser(uint256 userId) public view returns (DailySummaryData[] memory) {
-        string[] memory dates = userDates[userId];
+    function getAllDailySummariesByUser(address account) public view returns (DailySummaryData[] memory) {
+        string[] memory dates = userDates[account];
         DailySummaryData[] memory summaries = new DailySummaryData[](dates.length);
         
         for (uint256 i = 0; i < dates.length; i++) {
-            summaries[i] = userDailySummaryData[userId][dates[i]];
+            summaries[i] = userDailySummaryData[account][dates[i]];
         }
         
         return summaries;
     }
     
-    function getAllDailySummariesByAddress(address account) public view returns (DailySummaryData[] memory) {
-        uint256 userId = addressToUserId[account];
-        require(userId != 0, "User not registered");
-        return getAllDailySummariesByUser(userId);
+    /**
+     * @dev Obtiene información de una apuesta específica
+     */
+    function getBet(uint256 betId) public view returns (StepsBet memory) {
+        return stepsBets[betId];
+    }
+    
+    /**
+     * @dev Obtiene todos los participantes de una apuesta
+     */
+    function getBetParticipants(uint256 betId) public view returns (UserBet[] memory) {
+        return betParticipants[betId];
+    }
+    
+    /**
+     * @dev Obtiene todas las apuestas en las que participó un usuario
+     */
+    function getUserBets(address user) public view returns (uint256[] memory) {
+        return userBetIds[user];
+    }
+    
+    /**
+     * @dev Obtiene todas las apuestas activas
+     */
+    function getActiveBets() public view returns (uint256[] memory) {
+        return activeBetIds;
+    }
+    
+    /**
+     * @dev Calcula las ganancias potenciales de un usuario en una apuesta
+     */
+    function calculatePotentialWinnings(uint256 betId, address user) public view returns (uint256) {
+        if (stepsBets[betId].status != BetStatus.Resolved) {
+            return 0;
+        }
+        
+        UserBet[] memory participants = betParticipants[betId];
+        StepsBet memory bet = stepsBets[betId];
+        uint256 totalWinnings = 0;
+        
+        for (uint256 i = 0; i < participants.length; i++) {
+            if (participants[i].bettor == user && !participants[i].claimed) {
+                bool userWon = (participants[i].bettingFor && bet.goalAchieved) || 
+                              (!participants[i].bettingFor && !bet.goalAchieved);
+                
+                if (userWon) {
+                    uint256 winningPool = bet.goalAchieved ? bet.totalPoolFor : bet.totalPoolAgainst;
+                    uint256 losingPool = bet.goalAchieved ? bet.totalPoolAgainst : bet.totalPoolFor;
+                    
+                    if (winningPool > 0) {
+                        uint256 userShare = (participants[i].amount * losingPool) / winningPool;
+                        totalWinnings += participants[i].amount + userShare;
+                    }
+                }
+            }
+        }
+        
+        return totalWinnings;
+    }
+    
+    // ========== FUNCIONES INTERNAS ==========
+    
+    /**
+     * @dev Remueve una apuesta del array de apuestas activas
+     */
+    function _removeFromActiveBets(uint256 betId) internal {
+        for (uint256 i = 0; i < activeBetIds.length; i++) {
+            if (activeBetIds[i] == betId) {
+                activeBetIds[i] = activeBetIds[activeBetIds.length - 1];
+                activeBetIds.pop();
+                break;
+            }
+        }
     }
 } 
