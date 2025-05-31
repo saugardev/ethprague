@@ -65,6 +65,16 @@ contract WebProofVerifier is Verifier {
         bool claimed;                     // Si ya reclamó las ganancias
     }
     
+    // Struct para las comunidades
+    struct Community {
+        uint256 communityId;              // ID único de la comunidad
+        string title;                     // Título de la comunidad
+        address creator;                  // Usuario que creó la comunidad
+        uint256 minActivitiesRequired;    // Mínimo de actividades requeridas para unirse
+        uint256 memberCount;              // Número de miembros
+        uint256 createdAt;                // Timestamp de creación
+    }
+    
     // Mapping de address a datos de fitness
     mapping(address => UserFitnessData) public userFitnessData;
     
@@ -83,12 +93,26 @@ contract WebProofVerifier is Verifier {
     uint256 public nextBetId = 1;                            // Contador para IDs de apuestas
     uint256[] public activeBetIds;                           // Array de IDs de apuestas activas
     
+    // Mappings para las comunidades
+    mapping(uint256 => Community) public communities;                    // communityId => Community
+    mapping(uint256 => address[]) public communityMembers;              // communityId => array de miembros
+    mapping(address => uint256[]) public userCommunities;               // user => array de communityIds
+    mapping(uint256 => mapping(address => bool)) public isMember;       // communityId => user => bool
+    
+    uint256 public nextCommunityId = 1;                      // Contador para IDs de comunidades
+    uint256[] public allCommunityIds;                        // Array de todos los IDs de comunidades
+    
     // Events para las apuestas
     event StepsBetCreated(uint256 indexed betId, address indexed creator, string targetDate, uint256 minimumSteps);
     event BetPlaced(uint256 indexed betId, address indexed bettor, uint256 amount, bool bettingFor);
     event BetClosed(uint256 indexed betId);
     event BetResolved(uint256 indexed betId, bool goalAchieved, uint256 actualSteps);
     event WinningsClaimed(uint256 indexed betId, address indexed winner, uint256 amount);
+    
+    // Events para las comunidades
+    event CommunityCreated(uint256 indexed communityId, address indexed creator, string title, uint256 minActivitiesRequired);
+    event UserJoinedCommunity(uint256 indexed communityId, address indexed user);
+    event UserLeftCommunity(uint256 indexed communityId, address indexed user);
 
     constructor(address _prover) {
         prover = _prover;
@@ -450,6 +474,80 @@ contract WebProofVerifier is Verifier {
         }
     }
     
+    // ========== FUNCIONES DE COMUNIDADES ==========
+    
+    /**
+     * @dev Crea una nueva comunidad
+     * @param title Título de la comunidad
+     * @param minActivitiesRequired Mínimo de actividades requeridas para unirse
+     */
+    function createCommunity(
+        string calldata title,
+        uint256 minActivitiesRequired
+    ) external {
+        require(bytes(addressToUsername[msg.sender]).length != 0, "User must be registered first");
+        require(bytes(title).length > 0, "Title cannot be empty");
+        
+        uint256 communityId = nextCommunityId++;
+        
+        communities[communityId] = Community({
+            communityId: communityId,
+            title: title,
+            creator: msg.sender,
+            minActivitiesRequired: minActivitiesRequired,
+            memberCount: 1,
+            createdAt: block.timestamp
+        });
+        
+        // El creador se une automáticamente a la comunidad
+        communityMembers[communityId].push(msg.sender);
+        userCommunities[msg.sender].push(communityId);
+        isMember[communityId][msg.sender] = true;
+        allCommunityIds.push(communityId);
+        
+        emit CommunityCreated(communityId, msg.sender, title, minActivitiesRequired);
+        emit UserJoinedCommunity(communityId, msg.sender);
+    }
+    
+    /**
+     * @dev Permite a un usuario unirse a una comunidad
+     * @param communityId ID de la comunidad
+     */
+    function joinCommunity(uint256 communityId) external {
+        require(bytes(addressToUsername[msg.sender]).length != 0, "User must be registered first");
+        require(communities[communityId].creator != address(0), "Community does not exist");
+        require(!isMember[communityId][msg.sender], "User is already a member");
+        
+        // Verificar que el usuario cumple con el requisito de actividades
+        uint256 userActivities = userFitnessData[msg.sender].countOfActivities;
+        require(userActivities >= communities[communityId].minActivitiesRequired, 
+                "User does not meet minimum activities requirement");
+        
+        // Agregar usuario a la comunidad
+        communityMembers[communityId].push(msg.sender);
+        userCommunities[msg.sender].push(communityId);
+        isMember[communityId][msg.sender] = true;
+        communities[communityId].memberCount++;
+        
+        emit UserJoinedCommunity(communityId, msg.sender);
+    }
+    
+    /**
+     * @dev Permite a un usuario salir de una comunidad
+     * @param communityId ID de la comunidad
+     */
+    function leaveCommunity(uint256 communityId) external {
+        require(isMember[communityId][msg.sender], "User is not a member of this community");
+        
+        // Remover usuario de la comunidad
+        _removeUserFromCommunity(communityId, msg.sender);
+        _removeCommunityFromUser(msg.sender, communityId);
+        isMember[communityId][msg.sender] = false;
+        communities[communityId].memberCount--;
+        
+        emit UserLeftCommunity(communityId, msg.sender);
+    }
+    
     // ========== FUNCIONES DE CONSULTA ==========
     
     function getUsername(address account) public view returns (string memory) {
@@ -541,6 +639,78 @@ contract WebProofVerifier is Verifier {
         return totalWinnings;
     }
     
+    /**
+     * @dev Obtiene información de una comunidad específica
+     */
+    function getCommunity(uint256 communityId) public view returns (Community memory) {
+        require(communities[communityId].creator != address(0), "Community does not exist");
+        return communities[communityId];
+    }
+    
+    /**
+     * @dev Obtiene todos los miembros de una comunidad
+     */
+    function getCommunityMembers(uint256 communityId) public view returns (address[] memory) {
+        return communityMembers[communityId];
+    }
+    
+    /**
+     * @dev Obtiene todas las comunidades de un usuario
+     */
+    function getUserCommunities(address user) public view returns (uint256[] memory) {
+        return userCommunities[user];
+    }
+    
+    /**
+     * @dev Obtiene todas las comunidades existentes
+     */
+    function getAllCommunities() public view returns (uint256[] memory) {
+        return allCommunityIds;
+    }
+    
+    /**
+     * @dev Verifica si un usuario puede unirse a una comunidad
+     */
+    function canJoinCommunity(address user, uint256 communityId) public view returns (bool) {
+        if (communities[communityId].creator == address(0)) {
+            return false; // Comunidad no existe
+        }
+        
+        if (isMember[communityId][user]) {
+            return false; // Ya es miembro
+        }
+        
+        if (bytes(addressToUsername[user]).length == 0) {
+            return false; // Usuario no registrado
+        }
+        
+        uint256 userActivities = userFitnessData[user].countOfActivities;
+        return userActivities >= communities[communityId].minActivitiesRequired;
+    }
+    
+    /**
+     * @dev Obtiene las comunidades que un usuario puede unirse
+     */
+    function getJoinableCommunities(address user) public view returns (uint256[] memory) {
+        uint256[] memory joinable = new uint256[](allCommunityIds.length);
+        uint256 count = 0;
+        
+        for (uint256 i = 0; i < allCommunityIds.length; i++) {
+            if (canJoinCommunity(user, allCommunityIds[i])) {
+                joinable[count] = allCommunityIds[i];
+                count++;
+            }
+        }
+        
+        // Crear array del tamaño correcto
+        uint256[] memory result = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = joinable[i];
+        }
+        
+        return result;
+    }
+    
     // ========== FUNCIONES INTERNAS ==========
     
     /**
@@ -551,6 +721,34 @@ contract WebProofVerifier is Verifier {
             if (activeBetIds[i] == betId) {
                 activeBetIds[i] = activeBetIds[activeBetIds.length - 1];
                 activeBetIds.pop();
+                break;
+            }
+        }
+    }
+    
+    /**
+     * @dev Remueve un usuario del array de miembros de una comunidad
+     */
+    function _removeUserFromCommunity(uint256 communityId, address user) internal {
+        address[] storage members = communityMembers[communityId];
+        for (uint256 i = 0; i < members.length; i++) {
+            if (members[i] == user) {
+                members[i] = members[members.length - 1];
+                members.pop();
+                break;
+            }
+        }
+    }
+    
+    /**
+     * @dev Remueve una comunidad del array de comunidades de un usuario
+     */
+    function _removeCommunityFromUser(address user, uint256 communityId) internal {
+        uint256[] storage userComms = userCommunities[user];
+        for (uint256 i = 0; i < userComms.length; i++) {
+            if (userComms[i] == communityId) {
+                userComms[i] = userComms[userComms.length - 1];
+                userComms.pop();
                 break;
             }
         }
