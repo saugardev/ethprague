@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import { useAccount } from "wagmi";
 
 interface Target {
   id: string;
@@ -28,6 +29,7 @@ interface CreateTargetModalProps {
 }
 
 export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalProps) {
+  const { isConnected } = useAccount();
   const [currentStep, setCurrentStep] = useState(1);
   const [formData, setFormData] = useState({
     name: "",
@@ -171,6 +173,10 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
     opacity: { duration: 0.2 }
   };
 
+  // Check if this target will create a smart contract bet
+  const willCreateBet = selectedMetrics.includes("steps") && isConnected;
+  const stepsValue = metricValues["steps"] ? parseInt(metricValues["steps"]) : 0;
+
   const isStep1Valid = formData.name.trim() !== "" && formData.description.trim() !== "";
   const isStep2Valid = selectedMetrics.length > 0 && formData.deadline.trim() !== "";
   const isStep3Valid = selectedMetrics.every(metric => metricValues[metric] && metricValues[metric].trim() !== "");
@@ -185,6 +191,31 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
         <div className="mb-6">
           <h3 className="text-xl font-bold mb-2">Create New Target</h3>
           
+          {/* Smart Contract Integration Notice */}
+          {willCreateBet && (
+            <div className="alert alert-success mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+              </svg>
+              <div>
+                <div className="font-semibold">🔗 Smart Contract Target</div>
+                <div className="text-sm">This will create a step bet on the blockchain with 0.1 ETH stake!</div>
+              </div>
+            </div>
+          )}
+
+          {!isConnected && selectedMetrics.includes("steps") && (
+            <div className="alert alert-warning mb-4">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.732-.833-2.5 0L3.732 16c-.77.833.192 2.5 1.732 2.5z"></path>
+              </svg>
+              <div>
+                <div className="font-semibold">Connect Wallet</div>
+                <div className="text-sm">Connect your wallet to create step-based targets with betting!</div>
+              </div>
+            </div>
+          )}
+
           {/* Progress indicator */}
           <div className="flex items-center justify-between mb-4">
             {[1, 2, 3].map((step) => (
@@ -202,7 +233,6 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
               </div>
             ))}
           </div>
-
         </div>
 
         <div className="overflow-hidden px-1">
@@ -285,13 +315,20 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
                         {availableMetrics.map((metric) => (
                           <div
                             key={metric.key}
-                            className={`p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                            className={`p-3 rounded-lg border-2 cursor-pointer transition-all relative ${
                               selectedMetrics.includes(metric.key)
                                 ? 'border-success bg-success/10 text-success'
                                 : 'border-base-300 hover:border-base-400'
                             }`}
                             onClick={() => toggleMetric(metric.key)}
                           >
+                            {metric.key === "steps" && (
+                              <div className="absolute top-1 right-1">
+                                <div className="badge badge-primary badge-xs">
+                                  🔗 Smart Contract
+                                </div>
+                              </div>
+                            )}
                             <div className="flex items-center justify-between">
                               <div className="flex items-center gap-2">
                                 <span className="text-lg">{metric.icon}</span>
@@ -331,6 +368,19 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
                     <p className="text-sm text-base-content/70">Define your target goals</p>
                   </div>
 
+                  {/* Smart Contract Bet Summary */}
+                  {willCreateBet && (
+                    <div className="bg-primary/10 border border-primary/20 rounded-lg p-3 mb-4 flex-shrink-0">
+                      <div className="text-primary font-semibold text-sm mb-1">Bet Summary</div>
+                      <div className="text-xs text-base-content/70">
+                        Goal: {stepsValue.toLocaleString()} steps by {formData.deadline}
+                      </div>
+                      <div className="text-xs text-base-content/70">
+                        Stake: 0.1 ETH • Others can bet for/against your goal
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex-1 overflow-y-auto space-y-3 min-h-0">
                     {selectedMetrics.map((metricKey) => {
                       const metric = availableMetrics.find(m => m.key === metricKey);
@@ -342,6 +392,9 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
                             <span className="label-text font-medium flex items-center gap-2">
                               <span>{metric.icon}</span>
                               {metric.label}
+                              {metricKey === "steps" && isConnected && (
+                                <div className="badge badge-primary badge-xs">Blockchain</div>
+                              )}
                             </span>
                             <span className="label-text-alt text-base-content/50">{metric.unit}</span>
                           </label>
@@ -394,11 +447,11 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
           ) : (
             <button 
               type="button" 
-              className={`btn btn-success ${!isStep3Valid ? 'btn-disabled' : ''}`}
+              className={`btn ${willCreateBet ? 'btn-primary' : 'btn-success'} ${!isStep3Valid ? 'btn-disabled' : ''}`}
               onClick={handleSubmit}
               disabled={!isStep3Valid}
             >
-              Create Target
+              {willCreateBet ? 'Create Bet (0.1 ETH)' : 'Create Target'}
             </button>
           )}
         </div>
