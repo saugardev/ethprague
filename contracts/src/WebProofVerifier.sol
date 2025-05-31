@@ -608,6 +608,75 @@ contract WebProofVerifier is Verifier {
     }
     
     /**
+     * @dev Obtiene todas las apuestas cerradas (no resueltas aún)
+     */
+    function getClosedBets() public view returns (uint256[] memory) {
+        uint256[] memory closedBets = new uint256[](nextBetId - 1);
+        uint256 count = 0;
+        
+        for (uint256 i = 1; i < nextBetId; i++) {
+            if (stepsBets[i].creator != address(0) && stepsBets[i].status == BetStatus.Closed) {
+                closedBets[count] = i;
+                count++;
+            }
+        }
+        
+        // Crear array del tamaño correcto
+        uint256[] memory result = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = closedBets[i];
+        }
+        
+        return result;
+    }
+    
+    /**
+     * @dev Obtiene todas las apuestas resueltas
+     */
+    function getResolvedBets() public view returns (uint256[] memory) {
+        uint256[] memory resolvedBets = new uint256[](nextBetId - 1);
+        uint256 count = 0;
+        
+        for (uint256 i = 1; i < nextBetId; i++) {
+            if (stepsBets[i].creator != address(0) && stepsBets[i].status == BetStatus.Resolved) {
+                resolvedBets[count] = i;
+                count++;
+            }
+        }
+        
+        // Crear array del tamaño correcto
+        uint256[] memory result = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = resolvedBets[i];
+        }
+        
+        return result;
+    }
+    
+    /**
+     * @dev Obtiene todas las apuestas existentes
+     */
+    function getAllBets() public view returns (uint256[] memory) {
+        uint256[] memory allBets = new uint256[](nextBetId - 1);
+        uint256 count = 0;
+        
+        for (uint256 i = 1; i < nextBetId; i++) {
+            if (stepsBets[i].creator != address(0)) {
+                allBets[count] = i;
+                count++;
+            }
+        }
+        
+        // Crear array del tamaño correcto
+        uint256[] memory result = new uint256[](count);
+        for (uint256 i = 0; i < count; i++) {
+            result[i] = allBets[i];
+        }
+        
+        return result;
+    }
+    
+    /**
      * @dev Calcula las ganancias potenciales de un usuario en una apuesta
      */
     function calculatePotentialWinnings(uint256 betId, address user) public view returns (uint256) {
