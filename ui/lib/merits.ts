@@ -132,6 +132,7 @@ export const MERIT_REWARDS = {
   PROFILE_VERIFICATION: "10.00",
   FITNESS_DATA_VERIFICATION: "5.00",
   DAILY_SUMMARY_VERIFICATION: "3.00",
+  COMMUNITY_CREATION: "15.00",
 } as const;
 
 // Helper function to create a Merits API instance
