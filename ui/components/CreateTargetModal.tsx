@@ -302,7 +302,6 @@ export default function CreateTargetModal({ onCreateTarget }: CreateTargetModalP
                         className="input input-bordered w-full focus:input-success focus:outline-offset-0 rounded-md"
                         value={formData.deadline}
                         onChange={(e) => setFormData({...formData, deadline: e.target.value})}
-                        min={new Date().toISOString().split('T')[0]}
                       />
                     </div>
 

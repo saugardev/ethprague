@@ -3,11 +3,24 @@
 import { useState, useMemo } from "react";
 import { useAccount, useReadContract, useWriteContract } from "wagmi";
 import { Abi } from "viem";
+import { sepolia } from "viem/chains";
+import {
+  createExtensionWebProofProvider,
+  createVlayerClient,
+} from "@vlayer/sdk";
+import {
+  createWebProofRequest,
+  startPage,
+  expectUrl,
+  notarize,
+} from "@vlayer/sdk/web_proof";
 import Hero from "@/components/hero";
 import CreateTargetModal from "@/components/CreateTargetModal";
 import webProofVerifier from "../../../../contracts/out/WebProofVerifier.sol/WebProofVerifier.json";
+import webProofProver from "../../../../contracts/out/WebProofProver.sol/WebProofProver.json";
 
 const verifierAbi = webProofVerifier.abi as Abi;
+const proverAbi = webProofProver.abi as Abi;
 
 interface Target {
   id: string;
@@ -15,7 +28,7 @@ interface Target {
   description: string;
   metrics: Record<string, number>;
   deadline: string;
-  status: 'active' | 'completed' | 'failed';
+  status: 'active' | 'closed' | 'completed' | 'failed';
   progress: number;
   isFromContract?: boolean;
   betId?: number;
@@ -37,8 +50,25 @@ export default function Targets() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedMetricFilter, setSelectedMetricFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
+  
+  // Add states for bet operations
+  const [isClosingBet, setIsClosingBet] = useState<number | null>(null);
+  const [isResolvingBet, setIsResolvingBet] = useState<number | null>(null);
+  const [resolveModalBetId, setResolveModalBetId] = useState<number | null>(null);
+  const [resolveModalTargetDate, setResolveModalTargetDate] = useState<string>("");
 
   const { writeContract } = useWriteContract();
+
+  // Fetch user UUID from contract
+  const { data: userUuid } = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "addressToUsername",
+    args: address ? [address] : undefined,
+    query: {
+      enabled: isConnected && !!address,
+    },
+  }) as { data: string | undefined };
 
   // Mock targets (existing ones)
   const [mockTargets, setMockTargets] = useState<Target[]>([
@@ -91,71 +121,153 @@ export default function Targets() {
     }
   ]);
 
-  // Fetch active bets from contract
-  const { data: activeBetIds, refetch: refetchActiveBets } = useReadContract({
+  // Fetch ALL bet IDs
+  const { data: allBetIds, refetch: refetchActiveBets } = useReadContract({
     address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
     abi: verifierAbi,
-    functionName: "getActiveBets",
+    functionName: "getAllBets",
     query: {
       enabled: isConnected,
     },
   }) as { data: bigint[] | undefined; refetch: () => void };
 
-  // Fetch details for the first active bet (we'll expand this later for multiple bets)
-  const firstBetId = activeBetIds && activeBetIds.length > 0 ? activeBetIds[0] : null;
-  
-  const { data: firstBetData, refetch: refetchBetData } = useReadContract({
+  // Fetch individual bet data for up to 10 bets (we can expand this later)
+  const bet1 = useReadContract({
     address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
     abi: verifierAbi,
     functionName: "getBet",
-    args: firstBetId ? [firstBetId] : undefined,
+    args: allBetIds && allBetIds[0] ? [allBetIds[0]] : undefined,
     query: {
-      enabled: isConnected && !!firstBetId,
+      enabled: isConnected && allBetIds && allBetIds.length > 0,
     },
   });
 
+  const bet2 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getBet",
+    args: allBetIds && allBetIds[1] ? [allBetIds[1]] : undefined,
+    query: {
+      enabled: isConnected && allBetIds && allBetIds.length > 1,
+    },
+  });
+
+  const bet3 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getBet",
+    args: allBetIds && allBetIds[2] ? [allBetIds[2]] : undefined,
+    query: {
+      enabled: isConnected && allBetIds && allBetIds.length > 2,
+    },
+  });
+
+  const bet4 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getBet",
+    args: allBetIds && allBetIds[3] ? [allBetIds[3]] : undefined,
+    query: {
+      enabled: isConnected && allBetIds && allBetIds.length > 3,
+    },
+  });
+
+  const bet5 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getBet",
+    args: allBetIds && allBetIds[4] ? [allBetIds[4]] : undefined,
+    query: {
+      enabled: isConnected && allBetIds && allBetIds.length > 4,
+    },
+  });
+
+  // Refetch function for all bet data
+  const refetchBetData = () => {
+    bet1.refetch();
+    bet2.refetch();
+    bet3.refetch();
+    bet4.refetch();
+    bet5.refetch();
+  };
+
   // Convert contract bets to Target format
   const contractTargets: Target[] = useMemo(() => {
-    if (!firstBetData || !firstBetId) return [];
+    if (!allBetIds || allBetIds.length === 0) return [];
     
-    const betData = firstBetData as {
-      betId: bigint;
-      creator: string;
-      targetDate: string;
-      minimumSteps: bigint;
-      totalPoolFor: bigint;
-      totalPoolAgainst: bigint;
-      status: number;
-      goalAchieved: boolean;
-      actualSteps: bigint;
-      createdAt: bigint;
-      closedAt: bigint;
-      resolvedAt: bigint;
-    };
+    console.log("Bet IDs:", allBetIds);
+    
+    const targets: Target[] = [];
+    const betQueries = [bet1, bet2, bet3, bet4, bet5];
+    
+    allBetIds.forEach((betId, index) => {
+      if (index >= betQueries.length) return; // Skip if we don't have enough queries
+      
+      const betQuery = betQueries[index];
+      const betData = betQuery.data;
+      
+      if (!betData) {
+        console.log(`No data for bet ${index}:`, betQuery);
+        return;
+      }
+      
+      console.log(`Processing bet ${index}:`, betData);
+      
+      const bet = betData as {
+        betId: bigint;
+        creator: string;
+        targetDate: string;
+        minimumSteps: bigint;
+        totalPoolFor: bigint;
+        totalPoolAgainst: bigint;
+        status: number;
+        goalAchieved: boolean;
+        actualSteps: bigint;
+        createdAt: bigint;
+        closedAt: bigint;
+        resolvedAt: bigint;
+      };
 
-    // Calculate bet pool percentage (% betting FOR)
-    const totalPool = Number(betData.totalPoolFor) + Number(betData.totalPoolAgainst);
-    const forPercentage = totalPool > 0 ? Math.round((Number(betData.totalPoolFor) / totalPool) * 100) : 50;
+      // Safe number conversions with fallbacks
+      const minimumSteps = bet.minimumSteps ? Number(bet.minimumSteps) : 0;
+      const totalPoolFor = bet.totalPoolFor ? Number(bet.totalPoolFor) : 0;
+      const totalPoolAgainst = bet.totalPoolAgainst ? Number(bet.totalPoolAgainst) : 0;
+      const actualBetId = bet.betId ? Number(bet.betId) : Number(betId);
+      const actualSteps = bet.actualSteps ? Number(bet.actualSteps) : undefined;
 
-    return [{
-      id: `contract-${Number(firstBetId)}`,
-      name: `Step Challenge #${Number(firstBetId)}`,
-      description: `Achieve ${Number(betData.minimumSteps).toLocaleString()} steps by ${betData.targetDate}`,
-      metrics: {
-        steps: Number(betData.minimumSteps)
-      },
-      deadline: betData.targetDate,
-      status: betData.status === 0 ? 'active' as const : betData.status === 2 ? 
-        (betData.goalAchieved ? 'completed' as const : 'failed' as const) : 'active' as const,
-      progress: betData.status === 2 ? 
-        (betData.goalAchieved ? 100 : 0) : 
-        forPercentage,
-      isFromContract: true,
-      betId: Number(firstBetId),
-      actualSteps: betData.actualSteps ? Number(betData.actualSteps) : undefined,
-      goalAchieved: betData.goalAchieved
-    }];
-  }, [firstBetData, firstBetId]);
+      // Calculate bet pool percentage (% betting FOR)
+      const totalPool = totalPoolFor + totalPoolAgainst;
+      const forPercentage = totalPool > 0 ? Math.round((totalPoolFor / totalPool) * 100) : 50;
+
+      const target = {
+        id: `contract-${actualBetId}`,
+        name: `Step Challenge #${actualBetId}`,
+        description: `Achieve ${minimumSteps.toLocaleString()} steps by ${bet.targetDate || 'TBD'}`,
+        metrics: {
+          steps: minimumSteps
+        },
+        deadline: bet.targetDate || '2024-12-31',
+        status: bet.status === 0 ? 'active' as const : 
+                bet.status === 1 ? 'closed' as const : // Closed bets
+                bet.status === 2 ? 
+                  (bet.goalAchieved ? 'completed' as const : 'failed' as const) : 
+                  'active' as const,
+        progress: bet.status === 2 ? 
+          (bet.goalAchieved ? 100 : 0) : 
+          forPercentage,
+        isFromContract: true,
+        betId: actualBetId,
+        actualSteps: actualSteps,
+        goalAchieved: bet.goalAchieved
+      };
+
+      console.log("Created target:", target);
+      targets.push(target);
+    });
+
+    console.log("Final targets:", targets);
+    return targets;
+  }, [allBetIds, bet1.data, bet2.data, bet3.data, bet4.data, bet5.data]);
 
   // Combine contract targets first, then mock targets
   const allTargets = [...contractTargets, ...mockTargets];
@@ -247,6 +359,159 @@ export default function Targets() {
     );
   };
 
+  const handleCloseBet = (betId: number) => {
+    if (!isConnected || !address) return;
+    
+    setIsClosingBet(betId);
+    
+    writeContract(
+      {
+        address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+        abi: verifierAbi,
+        functionName: "closeBet",
+        args: [BigInt(betId)],
+      },
+      {
+        onSuccess: (txHash) => {
+          console.log("Bet closed successfully:", txHash);
+          refetchBetData();
+          refetchActiveBets();
+          setIsClosingBet(null);
+        },
+        onError: (error) => {
+          console.error("Failed to close bet:", error);
+          setIsClosingBet(null);
+        },
+      }
+    );
+  };
+
+  const openResolveModal = (betId: number, targetDate: string) => {
+    setResolveModalBetId(betId);
+    setResolveModalTargetDate(targetDate);
+    const modal = document.getElementById('resolve_bet_modal') as HTMLDialogElement;
+    modal?.showModal();
+  };
+
+  const closeResolveModal = () => {
+    setResolveModalBetId(null);
+    setResolveModalTargetDate("");
+    const modal = document.getElementById('resolve_bet_modal') as HTMLDialogElement;
+    modal?.close();
+  };
+
+  const handleResolveBet = async () => {
+    if (!isConnected || !address || !resolveModalBetId || !userUuid) return;
+
+    if (!userUuid.trim()) {
+      alert("You need to register your Garmin UUID first before resolving bets");
+      return;
+    }
+
+    try {
+      setIsResolvingBet(resolveModalBetId);
+
+      const vlayer = createVlayerClient({
+        url: process.env.NEXT_PUBLIC_PROVER_URL,
+        webProofProvider: createExtensionWebProofProvider({
+          notaryUrl: process.env.NEXT_PUBLIC_NOTARY_URL,
+          wsProxyUrl: process.env.NEXT_PUBLIC_WS_PROXY_URL,
+          token: process.env.NEXT_PUBLIC_VLAYER_API_TOKEN,
+        }),
+        token: process.env.NEXT_PUBLIC_VLAYER_API_TOKEN,
+      });
+
+      const dailySummaryUrl = `https://connect.garmin.com/usersummary-service/usersummary/daily/${userUuid}?calendarDate=${resolveModalTargetDate}`;
+      const dailyUrl = `https://connect.garmin.com/modern/sleep/${resolveModalTargetDate}/0`;
+
+      const webProofRequest = createWebProofRequest({
+        logoUrl: "/logo.png",
+        steps: [
+          startPage(dailyUrl, "Go to Garmin Connect"),
+          expectUrl(dailyUrl, "Getting daily data"),
+          notarize(
+            dailySummaryUrl,
+            "GET",
+            `Generate Proof of Steps for ${resolveModalTargetDate}`,
+            [
+              {
+                request: {
+                  headers: ["Authorization", "Cookie"],
+                },
+              },
+              {
+                response: {
+                  headers_except: ["Transfer-Encoding"],
+                },
+              },
+            ]
+          ),
+        ],
+      });
+
+      console.log("Generating web proof for bet resolution...");
+      const result = await vlayer.proveWeb({
+        address: process.env.NEXT_PUBLIC_PROVER_ADDRESS as `0x${string}`,
+        proverAbi: proverAbi as Abi,
+        functionName: "getDailySteps",
+        // @ts-expect-error Type 'any' is not assignable to type 'never'
+        args: [webProofRequest, address, userUuid, resolveModalTargetDate],
+        chainId: sepolia.id,
+      });
+
+      console.log("Web proof result:", result);
+
+      const result2 = await vlayer.waitForProvingResult({ hash: result });
+      console.log("Final proof result:", result2);
+
+      // First verify the daily steps data
+      writeContract(
+        {
+          address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+          abi: verifierAbi,
+          functionName: "verifyDailySteps",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          args: [...(result2 as any), resolveModalTargetDate],
+        },
+        {
+          onSuccess: (txHash) => {
+            console.log("Daily steps verified successfully:", txHash);
+            
+            // Now resolve the bet
+            writeContract(
+              {
+                address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+                abi: verifierAbi,
+                functionName: "resolveBet",
+                args: [BigInt(resolveModalBetId)],
+              },
+              {
+                onSuccess: (resolveTxHash) => {
+                  console.log("Bet resolved successfully:", resolveTxHash);
+                  refetchBetData();
+                  refetchActiveBets();
+                  setIsResolvingBet(null);
+                  closeResolveModal();
+                },
+                onError: (error) => {
+                  console.error("Failed to resolve bet:", error);
+                  setIsResolvingBet(null);
+                },
+              }
+            );
+          },
+          onError: (error) => {
+            console.error("Failed to verify daily steps:", error);
+            setIsResolvingBet(null);
+          },
+        }
+      );
+    } catch (err) {
+      console.error("Error resolving bet:", err);
+      setIsResolvingBet(null);
+    }
+  };
+
   const formatMetricValue = (key: string, value: number) => {
     if (key === 'steps' || key === 'caloriesBurned') {
       return value.toLocaleString();
@@ -258,6 +523,7 @@ export default function Targets() {
     switch (status) {
       case 'completed': return 'success';
       case 'failed': return 'error';
+      case 'closed': return 'info';
       default: return 'warning';
     }
   };
@@ -305,6 +571,25 @@ export default function Targets() {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
             </svg>
             <span>Connect your wallet to create step-based targets with betting functionality!</span>
+          </div>
+        )}
+
+        {/* UUID Status */}
+        {isConnected && !userUuid && (
+          <div className="alert alert-warning mb-6">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L3.732 16c-.77.833.192 2.5 1.732 2.5z"></path>
+            </svg>
+            <span>Register your Garmin UUID to resolve bets and earn rewards!</span>
+          </div>
+        )}
+
+        {isConnected && userUuid && (
+          <div className="alert alert-success mb-6">
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" className="stroke-current shrink-0 w-6 h-6">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <span>Garmin connected! UUID: {userUuid.substring(0, 8)}...</span>
           </div>
         )}
 
@@ -370,6 +655,15 @@ export default function Targets() {
                   >
                     <span className="w-5 text-center">✅</span>
                     <span>Completed</span>
+                  </button>
+                </li>
+                <li>
+                  <button 
+                    className={`flex items-center gap-2 ${statusFilter === 'closed' ? 'active bg-success text-success-content' : ''}`}
+                    onClick={() => setStatusFilter("closed")}
+                  >
+                    <span className="w-5 text-center">🔒</span>
+                    <span>Closed</span>
                   </button>
                 </li>
                 <li>
@@ -470,7 +764,9 @@ export default function Targets() {
                         </div>
                         <div className="flex items-center gap-2 mb-3">
                           <div className={`badge badge-${getStatusColor(target.status)} badge-outline bg-white/10 border-white/30 ${target.isFromContract ? 'text-black' : 'text-white'}`}>
-                            {target.status === 'active' ? '🎯' : target.status === 'completed' ? '✅' : '❌'} {target.status}
+                            {target.status === 'active' ? '🎯' : 
+                             target.status === 'closed' ? '🔒' : 
+                             target.status === 'completed' ? '✅' : '❌'} {target.status}
                           </div>
                           <div className={`badge badge-success badge-outline bg-white/10 border-white/30 ${target.isFromContract ? 'text-black' : 'text-white'}`}>
                             {Object.keys(target.metrics).length} metrics
@@ -573,21 +869,48 @@ export default function Targets() {
                       </svg>
                       Details
                     </button>
-                    {target.isFromContract && target.status === 'active' && target.betId && isConnected && (
-                      <div className="flex flex-col gap-2 lg:flex-none">
-                        <button 
-                          className="btn btn-accent bg-white/20 border-white/30 hover:bg-white/30 text-black text-xs px-2"
-                          onClick={() => handlePlaceBet(target.betId!, true, "50000000000000000")} // 0.05 ETH
-                        >
-                          Bet For 0.05Ξ
-                        </button>
-                        <button 
-                          className="btn btn-warning bg-white/20 border-white/30 hover:bg-white/30 text-black text-xs px-2"
-                          onClick={() => handlePlaceBet(target.betId!, false, "50000000000000000")} // 0.05 ETH
-                        >
-                          Bet Against 0.05Ξ
-                        </button>
-                      </div>
+                    
+                    {target.isFromContract && target.betId && isConnected && (
+                      <>
+                        {target.status === 'active' && (
+                          <div className="flex flex-col gap-2 lg:flex-none">
+                            <button 
+                              className="btn btn-accent bg-white/20 border-white/30 hover:bg-white/30 text-black text-xs px-2"
+                              onClick={() => handlePlaceBet(target.betId!, true, "50000000000000000")} // 0.05 ETH
+                            >
+                              Bet For 0.05Ξ
+                            </button>
+                            <button 
+                              className="btn btn-warning bg-white/20 border-white/30 hover:bg-white/30 text-black text-xs px-2"
+                              onClick={() => handlePlaceBet(target.betId!, false, "50000000000000000")} // 0.05 ETH
+                            >
+                              Bet Against 0.05Ξ
+                            </button>
+                          </div>
+                        )}
+                        
+                        {target.status === 'active' && (
+                          /* Close Bet Button */
+                          <button
+                            className="btn btn-error bg-white/20 border-white/30 hover:bg-white/30 text-black text-xs px-2"
+                            onClick={() => handleCloseBet(target.betId!)}
+                            disabled={isClosingBet === target.betId}
+                          >
+                            {isClosingBet === target.betId ? "Closing..." : "Close Bet"}
+                          </button>
+                        )}
+                        
+                        {(target.status === 'closed' || target.status === 'active') && (
+                          /* Resolve Bet Button */
+                          <button
+                            className="btn btn-info bg-white/20 border-white/30 hover:bg-white/30 text-black text-xs px-2"
+                            onClick={() => openResolveModal(target.betId!, target.deadline)}
+                            disabled={isResolvingBet === target.betId}
+                          >
+                            {isResolvingBet === target.betId ? "Resolving..." : "Resolve Bet"}
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>
@@ -623,6 +946,66 @@ export default function Targets() {
       </div>
 
       <CreateTargetModal onCreateTarget={handleCreateTarget} />
+
+      {/* Resolve Bet Modal */}
+      <dialog id="resolve_bet_modal" className="modal">
+        <div className="modal-box max-w-md">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-lg">Resolve Bet #{resolveModalBetId}</h3>
+            <button 
+              className="btn btn-sm btn-circle btn-ghost"
+              onClick={closeResolveModal}
+              disabled={isResolvingBet === resolveModalBetId}
+            >
+              ✕
+            </button>
+          </div>
+
+          <div className="text-sm text-base-content/70 mb-6">
+            <p>Generate a web proof to resolve the bet for {resolveModalTargetDate}. This will:</p>
+            <ul className="list-disc list-inside mt-2 space-y-1">
+              <li>Open Garmin Connect daily data page</li>
+              <li>Generate a proof of your step count</li>
+              <li>Resolve the bet and distribute winnings</li>
+            </ul>
+          </div>
+
+          {/* User UUID Info */}
+          {userUuid && (
+            <div className="bg-base-200 rounded-lg p-3 mb-4">
+              <p className="text-xs text-base-content/70 mb-1">Connected Garmin UUID:</p>
+              <code className="text-primary font-mono text-sm">{userUuid}</code>
+            </div>
+          )}
+
+          <button
+            onClick={handleResolveBet}
+            disabled={!userUuid || isResolvingBet === resolveModalBetId || !isConnected}
+            className={`btn w-full mb-4 ${
+              !userUuid || isResolvingBet === resolveModalBetId || !isConnected
+                ? "btn-disabled"
+                : "btn-primary"
+            }`}
+          >
+            {!isConnected
+              ? "Connect Wallet to Continue"
+              : !userUuid
+              ? "Register Garmin UUID First"
+              : isResolvingBet === resolveModalBetId
+              ? "Generating Proof..."
+              : "Generate Proof"}
+          </button>
+
+          {!userUuid && (
+            <div className="alert alert-warning mb-4">
+              <span className="text-sm">You need to register your Garmin UUID first to resolve bets.</span>
+            </div>
+          )}
+        </div>
+        <form method="dialog" className="modal-backdrop">
+          <button>close</button>
+        </form>
+      </dialog>
     </>
   );
 } 
