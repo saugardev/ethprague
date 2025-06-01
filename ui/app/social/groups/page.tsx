@@ -1,8 +1,26 @@
 "use client";
 
 import { useState, useMemo } from "react";
+import { useAccount, useReadContract, useWriteContract } from "wagmi";
+import { Abi } from "viem";
+import { sepolia } from "viem/chains";
+import {
+  createExtensionWebProofProvider,
+  createVlayerClient,
+} from "@vlayer/sdk";
+import {
+  createWebProofRequest,
+  startPage,
+  expectUrl,
+  notarize,
+} from "@vlayer/sdk/web_proof";
 import Hero from "@/components/hero";
 import CreateGroupModal from "@/components/CreateGroupModal";
+import webProofVerifier from "../../../../contracts/out/WebProofVerifier.sol/WebProofVerifier.json";
+import webProofProver from "../../../../contracts/out/WebProofProver.sol/WebProofProver.json";
+
+const verifierAbi = webProofVerifier.abi as Abi;
+const proverAbi = webProofProver.abi as Abi;
 
 interface Group {
   id: string;
@@ -10,6 +28,21 @@ interface Group {
   description: string;
   metrics: Record<string, number>;
   memberCount: number;
+  isFromContract?: boolean;
+  communityId?: number;
+  creator?: string;
+  status?: 'active' | 'joined' | 'joinable' | 'not_eligible';
+  minActivitiesRequired?: number;
+}
+
+interface UserFitnessData {
+  userAddress: string;
+  username: string;
+  countOfActivities: bigint;
+  totalDistance: bigint;
+  totalCalories: bigint;
+  avgHeartRate: bigint;
+  lastUpdated: bigint;
 }
 
 const metricLabels: Record<string, { label: string; icon: string; unit: string }> = {
@@ -18,14 +51,244 @@ const metricLabels: Record<string, { label: string; icon: string; unit: string }
   caloriesBurned: { label: "Calories", icon: "🔥", unit: "" },
   fitnessAge: { label: "Fitness Age", icon: "💪", unit: "" },
   heartRate: { label: "Heart Rate", icon: "❤️", unit: "bpm" },
-  workoutMinutes: { label: "Workout", icon: "🏋️", unit: "min/week" }
+  workoutMinutes: { label: "Workout", icon: "🏋️", unit: "min/week" },
+  countOfActivities: { label: "Activity Count", icon: "📊", unit: "activities" }
 };
 
 export default function Groups() {
+  const { address, isConnected } = useAccount();
+  const { writeContract } = useWriteContract();
+  
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedMetricFilter, setSelectedMetricFilter] = useState("");
+  const [isJoiningCommunity, setIsJoiningCommunity] = useState<number | null>(null);
+  const [isLeavingCommunity, setIsLeavingCommunity] = useState<number | null>(null);
 
-  const [groups, setGroups] = useState<Group[]>([
+  // Fitness verification modal states
+  const [isFitnessModalOpen, setIsFitnessModalOpen] = useState(false);
+  const endDate = new Date().toISOString().split('T')[0]; // Today's date in YYYY-MM-DD format
+  const [isFitnessLoading, setIsFitnessLoading] = useState(false);
+  const [fitnessError, setFitnessError] = useState<string | null>(null);
+  const [fitnessProofHash, setFitnessProofHash] = useState<string | null>(null);
+
+  // Fetch user's current fitness data to check eligibility
+  const { data: userFitnessData, refetch: refetchUserFitnessData } = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getUserFitnessData",
+    args: address ? [address] : undefined,
+    query: {
+      enabled: isConnected && !!address,
+    },
+  }) as { data: UserFitnessData | undefined; refetch: () => void };
+
+  // Fetch username to check if profile is verified
+  const { data: username } = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getUsername",
+    args: address ? [address] : undefined,
+    query: {
+      enabled: !!address,
+    },
+  }) as { data: string | undefined };
+
+  // Fetch all community IDs
+  const { data: allCommunityIds, refetch: refetchCommunities } = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getAllCommunities",
+    query: {
+      enabled: isConnected,
+    },
+  }) as { data: bigint[] | undefined; refetch: () => void };
+
+  // Fetch user's communities
+  const { data: userCommunityIds, refetch: refetchUserCommunities } = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getUserCommunities",
+    args: address ? [address] : undefined,
+    query: {
+      enabled: isConnected && !!address,
+    },
+  }) as { data: bigint[] | undefined; refetch: () => void };
+
+  // Fetch joinable communities for user
+  const { data: joinableCommunityIds, refetch: refetchJoinableCommunities } = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getJoinableCommunities",
+    args: address ? [address] : undefined,
+    query: {
+      enabled: isConnected && !!address,
+    },
+  }) as { data: bigint[] | undefined; refetch: () => void };
+
+  // Fetch individual community data using fixed hooks (no loops!)
+  const community1 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[0] ? [allCommunityIds[0]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 0,
+    },
+  });
+
+  const community2 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[1] ? [allCommunityIds[1]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 1,
+    },
+  });
+
+  const community3 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[2] ? [allCommunityIds[2]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 2,
+    },
+  });
+
+  const community4 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[3] ? [allCommunityIds[3]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 3,
+    },
+  });
+
+  const community5 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[4] ? [allCommunityIds[4]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 4,
+    },
+  });
+
+  const community6 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[5] ? [allCommunityIds[5]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 5,
+    },
+  });
+
+  const community7 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[6] ? [allCommunityIds[6]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 6,
+    },
+  });
+
+  const community8 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[7] ? [allCommunityIds[7]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 7,
+    },
+  });
+
+  const community9 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[8] ? [allCommunityIds[8]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 8,
+    },
+  });
+
+  const community10 = useReadContract({
+    address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+    abi: verifierAbi,
+    functionName: "getCommunity",
+    args: allCommunityIds && allCommunityIds[9] ? [allCommunityIds[9]] : undefined,
+    query: {
+      enabled: isConnected && allCommunityIds && allCommunityIds.length > 9,
+    },
+  });
+
+  const communityQueries = [
+    community1, community2, community3, community4, community5,
+    community6, community7, community8, community9, community10
+  ];
+
+  // Convert contract communities to Group format
+  const contractGroups: Group[] = useMemo(() => {
+    if (!allCommunityIds || allCommunityIds.length === 0) return [];
+    
+    const communities: Group[] = [];
+    
+    allCommunityIds.forEach((communityId, index) => {
+      if (index >= communityQueries.length || !communityQueries[index]?.data) return;
+      
+      const communityData = communityQueries[index].data;
+      
+      const community = communityData as {
+        communityId: bigint;
+        title: string;
+        creator: string;
+        minActivitiesRequired: bigint;
+        memberCount: bigint;
+        createdAt: bigint;
+      };
+
+      const actualCommunityId = Number(community.communityId);
+      const userActivities = userFitnessData ? Number(userFitnessData.countOfActivities) : 0;
+      const minRequired = Number(community.minActivitiesRequired);
+      
+      // Determine status
+      let status: 'active' | 'joined' | 'joinable' | 'not_eligible' = 'not_eligible';
+      
+      if (userCommunityIds && userCommunityIds.some(id => Number(id) === actualCommunityId)) {
+        status = 'joined';
+      } else if (joinableCommunityIds && joinableCommunityIds.some(id => Number(id) === actualCommunityId)) {
+        status = 'joinable';
+      } else if (userActivities >= minRequired) {
+        status = 'joinable';
+      }
+
+      const communityItem: Group = {
+        id: `contract-${actualCommunityId}`,
+        name: community.title,
+        description: `Minimum ${minRequired} activities required • Verified fitness community`,
+        metrics: {
+          countOfActivities: minRequired
+        },
+        memberCount: Number(community.memberCount),
+        isFromContract: true,
+        communityId: actualCommunityId,
+        creator: community.creator,
+        status: status,
+        minActivitiesRequired: minRequired
+      };
+
+      communities.push(communityItem);
+    });
+
+    return communities;
+  }, [allCommunityIds, community1.data, community2.data, community3.data, community4.data, community5.data, community6.data, community7.data, community8.data, community9.data, community10.data, userCommunityIds, joinableCommunityIds, userFitnessData]);
+
+  // Mock groups for examples (read-only)
+  const mockGroups: Group[] = [
     {
       id: "1",
       name: "Early Birds",
@@ -82,15 +345,226 @@ export default function Groups() {
       },
       memberCount: 35
     }
-  ]);
+  ];
 
   const handleCreateGroup = (groupData: Omit<Group, 'id' | 'memberCount'>) => {
-    const newGroup: Group = {
-      id: Date.now().toString(),
-      ...groupData,
-      memberCount: 1
-    };
-    setGroups([...groups, newGroup]);
+    if (!isConnected) {
+      alert("Please connect your wallet to create an onchain community");
+      return;
+    }
+
+    // Always create onchain communities for new groups
+    // Derive minimum activities requirement from metrics complexity
+    let minActivitiesRequired: number;
+    
+    if (groupData.metrics.countOfActivities) {
+      // If user explicitly set activity count, use that
+      minActivitiesRequired = groupData.metrics.countOfActivities;
+    } else {
+      // Derive from metric complexity: more metrics = higher activity requirement
+      const metricCount = Object.keys(groupData.metrics).length;
+      const metricValues = Object.values(groupData.metrics);
+      const avgMetricValue = metricValues.reduce((sum, val) => sum + val, 0) / metricValues.length;
+      
+      // Base requirement: 5 activities + 2 per additional metric + scaling based on metric values
+      minActivitiesRequired = Math.max(5, Math.floor(5 + (metricCount - 1) * 2 + avgMetricValue / 1000));
+      
+      // Cap between 5 and 50 activities
+      minActivitiesRequired = Math.min(50, Math.max(5, minActivitiesRequired));
+    }
+
+    console.log("Creating onchain community:", {
+      title: groupData.name,
+      minActivitiesRequired,
+      metrics: groupData.metrics
+    });
+
+    writeContract(
+      {
+        address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+        abi: verifierAbi,
+        functionName: "createCommunity",
+        args: [groupData.name, BigInt(minActivitiesRequired)],
+      },
+      {
+        onSuccess: (txHash) => {
+          console.log("Onchain community created successfully:", txHash);
+          // Refresh community data to show the new community
+          refetchCommunities();
+          // Refetch all community queries
+          communityQueries.forEach(query => query.refetch());
+        },
+        onError: (error) => {
+          console.error("Failed to create onchain community:", error);
+          alert("Failed to create onchain community. Please try again or check your wallet connection.");
+        },
+      }
+    );
+  };
+
+  const handleGenerateFitnessProof = async () => {
+    if (!address || !username) {
+      setFitnessError("Please verify your profile first");
+      return;
+    }
+
+    try {
+      setIsFitnessLoading(true);
+      setFitnessError(null);
+
+      const vlayer = createVlayerClient({
+        url: process.env.NEXT_PUBLIC_PROVER_URL,
+        webProofProvider: createExtensionWebProofProvider({
+          notaryUrl: process.env.NEXT_PUBLIC_NOTARY_URL,
+          wsProxyUrl: process.env.NEXT_PUBLIC_WS_PROXY_URL,
+          token: process.env.NEXT_PUBLIC_VLAYER_API_TOKEN,
+        }),
+        token: process.env.NEXT_PUBLIC_VLAYER_API_TOKEN,
+      });
+
+      const fitnessUrl = `https://connect.garmin.com/fitnessstats-service/activity?aggregation=lifetime&groupByParentActivityType=false&groupByEventType=false&startDate=1970-01-01&endDate=${endDate}&metric=duration&metric=distance&metric=movingDuration&metric=splitSummaries.noOfSplits.CLIMB_ACTIVE&metric=splitSummaries.duration.CLIMB_ACTIVE&metric=splitSummaries.totalAscent.CLIMB_ACTIVE&metric=splitSummaries.maxElevationGain.CLIMB_ACTIVE&metric=splitSummaries.numClimbsAttempted.CLIMB_ACTIVE&metric=splitSummaries.numClimbsCompleted.CLIMB_ACTIVE&metric=splitSummaries.numClimbSends.CLIMB_ACTIVE&metric=splitSummaries.numFalls.CLIMB_ACTIVE&metric=calories&metric=elevationGain&metric=elevationLoss&metric=avgSpeed&metric=maxSpeed&metric=avgGradeAdjustedSpeed&metric=avgHr&metric=maxHr&metric=avgRunCadence&metric=maxRunCadence&metric=avgBikeCadence&metric=maxBikeCadence&metric=avgWheelchairCadence&metric=maxWheelchairCadence&metric=avgPower&metric=maxPower&metric=avgVerticalOscillation&metric=avgGroundContactTime&metric=avgStrideLength&metric=avgStress&metric=maxStress&metric=splitSummaries.duration.CLIMB_REST&metric=beginPackWeight&metric=steps&standardizedUnits=false`;
+
+      const webProofRequest = createWebProofRequest({
+        logoUrl: "/logo.png",
+        steps: [
+          startPage(
+            "https://connect.garmin.com/modern/",
+            "Go to Garmin Connect"
+          ),
+          expectUrl(
+            "https://connect.garmin.com/modern/home",
+            "Log in to Garmin"
+          ),
+          expectUrl(
+            "https://connect.garmin.com/modern/progress-summary",
+            "Go to Progress Summary"
+          ),
+          notarize(
+            fitnessUrl,
+            "GET",
+            "Generate Proof of Count of Activities",
+            [
+              {
+                request: {
+                  headers: ["Authorization", "Cookie"],
+                },
+              },
+              {
+                response: {
+                  headers_except: ["Transfer-Encoding"],
+                },
+              },
+            ]
+          ),
+        ],
+      });
+
+      const result = await vlayer.proveWeb({
+        address: process.env.NEXT_PUBLIC_PROVER_ADDRESS as `0x${string}`,
+        proverAbi: proverAbi as Abi,
+        functionName: "getCountOfActivities",
+        // @ts-expect-error Type 'any' is not assignable to type 'never'
+        args: [webProofRequest, address, endDate],
+        chainId: sepolia.id,
+      });
+
+      console.log("Fitness proof result:", result);
+
+      const result2 = await vlayer.waitForProvingResult({ hash: result });
+      console.log("Fitness proof result2:", result2);
+
+      // Use wagmi's writeContract to verify the fitness data
+      writeContract(
+        {
+          address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+          abi: verifierAbi,
+          functionName: "verifyCountOfActivities",
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          args: result2 as any,
+        },
+        {
+          onSuccess: (txHash) => {
+            console.log("Fitness verification successful:", txHash);
+            setFitnessProofHash(txHash);
+            // Refresh all relevant data after successful verification
+            refetchUserFitnessData();
+            refetchCommunities();
+            refetchUserCommunities();
+            refetchJoinableCommunities();
+            // Refetch all community queries to update status
+            communityQueries.forEach(query => query.refetch());
+          },
+          onError: (error) => {
+            console.error("Fitness verification failed:", error);
+            setFitnessError(error.message);
+          },
+        }
+      );
+    } catch (err) {
+      setFitnessError(err instanceof Error ? err.message : "An error occurred");
+    } finally {
+      setIsFitnessLoading(false);
+    }
+  };
+
+  const closeFitnessModal = () => {
+    setIsFitnessModalOpen(false);
+    setFitnessError(null);
+    setFitnessProofHash(null);
+  };
+
+  const handleJoinCommunity = (communityId: number) => {
+    if (!isConnected || !address) return;
+    
+    setIsJoiningCommunity(communityId);
+    
+    writeContract(
+      {
+        address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+        abi: verifierAbi,
+        functionName: "joinCommunity",
+        args: [BigInt(communityId)],
+      },
+      {
+        onSuccess: (txHash) => {
+          console.log("Joined community successfully:", txHash);
+          refetchCommunities();
+          refetchUserCommunities();
+          setIsJoiningCommunity(null);
+        },
+        onError: (error) => {
+          console.error("Failed to join community:", error);
+          setIsJoiningCommunity(null);
+        },
+      }
+    );
+  };
+
+  const handleLeaveCommunity = (communityId: number) => {
+    if (!isConnected || !address) return;
+    
+    setIsLeavingCommunity(communityId);
+    
+    writeContract(
+      {
+        address: process.env.NEXT_PUBLIC_VERIFIER_ADDRESS as `0x${string}`,
+        abi: verifierAbi,
+        functionName: "leaveCommunity",
+        args: [BigInt(communityId)],
+      },
+      {
+        onSuccess: (txHash) => {
+          console.log("Left community successfully:", txHash);
+          refetchCommunities();
+          refetchUserCommunities();
+          setIsLeavingCommunity(null);
+        },
+        onError: (error) => {
+          console.error("Failed to leave community:", error);
+          setIsLeavingCommunity(null);
+        },
+      }
+    );
   };
 
   const formatMetricValue = (key: string, value: number) => {
@@ -103,18 +577,22 @@ export default function Groups() {
   // Get all unique metrics across all groups
   const availableMetrics = useMemo(() => {
     const allMetrics = new Set<string>();
-    groups.forEach(group => {
+    // Combine contract and mock groups
+    const allGroupsCombined = [...contractGroups, ...mockGroups];
+    allGroupsCombined.forEach(group => {
       Object.keys(group.metrics).forEach(metric => allMetrics.add(metric));
     });
     return Array.from(allMetrics).map(metric => ({
       key: metric,
       label: metricLabels[metric]?.label || metric
     }));
-  }, [groups]);
+  }, [contractGroups, mockGroups]);
 
   // Filter groups based on search and metric filter
   const filteredGroups = useMemo(() => {
-    return groups.filter(group => {
+    // Combine contract and mock groups
+    const allGroupsCombined = [...contractGroups, ...mockGroups];
+    return allGroupsCombined.filter(group => {
       const matchesSearch = group.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
                            group.description.toLowerCase().includes(searchTerm.toLowerCase());
       
@@ -123,7 +601,7 @@ export default function Groups() {
       
       return matchesSearch && matchesMetric;
     });
-  }, [groups, searchTerm, selectedMetricFilter]);
+  }, [contractGroups, mockGroups, searchTerm, selectedMetricFilter]);
 
   return (
     <>
@@ -132,6 +610,45 @@ export default function Groups() {
         subtitle="Join communities based on your health metrics and fitness goals."
         showCta={false}
       />
+
+      {/* Compact Fitness Verification Section */}
+      {isConnected && !username && (
+        <div className="mt-8 bg-amber-50 border border-amber-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="text-amber-600">⚠️</div>
+              <div>
+                <h3 className="font-semibold text-amber-800">Profile Verification Required</h3>
+                <p className="text-sm text-amber-700">Verify your Garmin profile first to access communities</p>
+              </div>
+            </div>
+            <a href="/test" className="btn btn-warning btn-sm">
+              Verify Profile
+            </a>
+          </div>
+        </div>
+      )}
+
+      {isConnected && username && userFitnessData && Number(userFitnessData.countOfActivities) === 0 && (
+        <div className="mt-8 bg-blue-50 border border-blue-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <div className="text-blue-600">📊</div>
+              <div>
+                <h3 className="font-semibold text-blue-800">Verify Fitness Data</h3>
+                <p className="text-sm text-blue-700">Prove your activity count to join communities</p>
+              </div>
+            </div>
+            <button 
+              onClick={() => setIsFitnessModalOpen(true)}
+              className="btn btn-primary btn-sm"
+              disabled={!isConnected}
+            >
+              Verify Activities
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="mt-8">
         <div className="flex flex-col lg:flex-row justify-between items-start lg:items-center gap-4 mb-6">
@@ -264,18 +781,81 @@ export default function Groups() {
                   
                   {/* Action Area */}
                   <div className="flex flex-row lg:flex-col gap-3 lg:min-w-[120px]">
-                    <button className="btn btn-success bg-white/20 border-white/30 hover:bg-white/30 text-white flex-1 lg:flex-none">
-                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
-                      </svg>
-                      Join
-                    </button>
-                    <button className="btn btn-outline border-white/30 text-white hover:bg-white/10 flex-1 lg:flex-none">
-                      <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                      </svg>
-                      Info
-                    </button>
+                    {/* Handle contract-based communities */}
+                    {group.isFromContract && group.communityId ? (
+                      <>
+                        {!isConnected ? (
+                          <button 
+                            className="btn btn-success bg-white/20 border-white/30 hover:bg-white/30 text-white flex-1 lg:flex-none"
+                            onClick={() => alert("Please connect your wallet to join communities")}
+                          >
+                            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                            </svg>
+                            Join
+                          </button>
+                        ) : group.status === 'joined' ? (
+                          <>
+                            <button 
+                              className="btn btn-error bg-white/20 border-white/30 hover:bg-white/30 text-white flex-1 lg:flex-none"
+                              onClick={() => handleLeaveCommunity(group.communityId!)}
+                              disabled={isLeavingCommunity === group.communityId}
+                            >
+                              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013 3v1" />
+                              </svg>
+                              {isLeavingCommunity === group.communityId ? "Leaving..." : "Leave"}
+                            </button>
+                            <div className="badge badge-success badge-outline bg-white/10 border-white/30 text-white">
+                              Member
+                            </div>
+                          </>
+                        ) : group.status === 'not_eligible' && group.minActivitiesRequired ? (
+                          <>
+                            <button 
+                              className="btn btn-disabled bg-white/10 border-white/20 text-white/50 flex-1 lg:flex-none"
+                              disabled
+                            >
+                              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                              </svg>
+                              Not Eligible
+                            </button>
+                            <div className="text-xs text-white/60 flex-1 lg:flex-none text-center">
+                              Need {group.minActivitiesRequired - (userFitnessData ? Number(userFitnessData.countOfActivities) : 0)} more activities
+                            </div>
+                          </>
+                        ) : (
+                          // Default join button for eligible users or unknown status
+                          <button 
+                            className="btn btn-success bg-white/20 border-white/30 hover:bg-white/30 text-white flex-1 lg:flex-none"
+                            onClick={() => handleJoinCommunity(group.communityId!)}
+                            disabled={isJoiningCommunity === group.communityId}
+                          >
+                            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                            </svg>
+                            {isJoiningCommunity === group.communityId ? "Joining..." : "Join"}
+                          </button>
+                        )}
+                      </>
+                    ) : (
+                      /* Regular mock groups */
+                      <>
+                        <button className="btn btn-success bg-white/20 border-white/30 hover:bg-white/30 text-white flex-1 lg:flex-none">
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197m13.5-9a2.5 2.5 0 11-5 0 2.5 2.5 0 015 0z" />
+                          </svg>
+                          Join
+                        </button>
+                        <button className="btn btn-outline border-white/30 text-white hover:bg-white/10 flex-1 lg:flex-none">
+                          <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          Info
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               </div>
@@ -309,6 +889,79 @@ export default function Groups() {
       </div>
 
       <CreateGroupModal onCreateGroup={handleCreateGroup} />
+
+      {/* Fitness Verification Modal */}
+      {isFitnessModalOpen && (
+        <div className="modal modal-open">
+          <div className="modal-box max-w-md">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="font-bold text-lg">Verify Fitness Data</h3>
+              <button 
+                className="btn btn-sm btn-circle btn-ghost"
+                onClick={closeFitnessModal}
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="text-sm text-base-content/70 mb-6">
+              <p>Generate a web proof to verify your Garmin activity count. This will:</p>
+              <ul className="list-disc list-inside mt-2 space-y-1">
+                <li>Open your Garmin Connect data</li>
+                <li>Generate proof of your activity count (up to today)</li>
+                <li>Update your on-chain fitness data</li>
+              </ul>
+            </div>
+
+            {/* Current Fitness Data Display */}
+            {userFitnessData && (
+              <div className="mb-6 p-3 bg-base-200 rounded-md">
+                <h4 className="font-medium text-sm mb-2">Current Verified Data:</h4>
+                <div className="grid grid-cols-2 gap-2 text-xs">
+                  <div>Activities: {userFitnessData.countOfActivities?.toString() || "0"}</div>
+                  <div>Total Distance: {userFitnessData.totalDistance?.toString() || "0"} m</div>
+                  <div>Total Calories: {userFitnessData.totalCalories?.toString() || "0"}</div>
+                  <div>Avg Heart Rate: {userFitnessData.avgHeartRate?.toString() || "0"} bpm</div>
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={handleGenerateFitnessProof}
+              disabled={isFitnessLoading || !isConnected}
+              className={`btn w-full mb-4 ${
+                isFitnessLoading || !isConnected
+                  ? "btn-disabled"
+                  : "btn-primary"
+              }`}
+            >
+              {!isConnected
+                ? "Connect Wallet to Continue"
+                : isFitnessLoading
+                ? "Generating Proof..."
+                : "Verify Count of Activities"}
+            </button>
+
+            {fitnessError && (
+              <div className="alert alert-error mb-4">
+                <span className="text-sm">{fitnessError}</span>
+              </div>
+            )}
+
+            {fitnessProofHash && (
+              <div className="alert alert-success">
+                <div>
+                  <p className="font-medium text-sm">Fitness Data Verified Successfully!</p>
+                  <p className="text-xs mt-1 break-all opacity-70">
+                    Transaction Hash: {fitnessProofHash}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="modal-backdrop" onClick={closeFitnessModal}></div>
+        </div>
+      )}
     </>
   );
 } 

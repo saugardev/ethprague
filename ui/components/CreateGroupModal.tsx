@@ -86,6 +86,15 @@ export default function CreateGroupModal({ onCreateGroup }: CreateGroupModalProp
       unit: "minutes/week",
       min: 0,
       icon: "🏋️"
+    },
+    {
+      key: "countOfActivities",
+      label: "Activity Count (Onchain)",
+      placeholder: "10",
+      unit: "verified activities",
+      min: 1,
+      max: 1000,
+      icon: "📊"
     }
   ];
 
