@@ -100,11 +100,20 @@ export default function Groups() {
   const [isFitnessLoading, setIsFitnessLoading] = useState(false);
   const [fitnessError, setFitnessError] = useState<string | null>(null);
   const [fitnessProofHash, setFitnessProofHash] = useState<string | null>(null);
+  const [fitnessVerificationTxHash, setFitnessVerificationTxHash] = useState<
+    `0x${string}` | null
+  >(null);
 
   // Watch for community creation transaction confirmation
   const { isSuccess: isCommunityCreationTxSuccess } =
     useWaitForTransactionReceipt({
       hash: communityCreationTxHash || undefined,
+    });
+
+  // Watch for fitness verification transaction confirmation
+  const { isSuccess: isFitnessVerificationTxSuccess } =
+    useWaitForTransactionReceipt({
+      hash: fitnessVerificationTxHash || undefined,
     });
 
   // Distribute Merits when community creation is successful
@@ -627,6 +636,8 @@ export default function Groups() {
             refetchJoinableCommunities();
             // Refetch all community queries to update status
             communityQueries.forEach((query) => query.refetch());
+            // Set transaction hash for fitness verification tracking
+            setFitnessVerificationTxHash(txHash);
           },
           onError: (error) => {
             console.error("Fitness verification failed:", error);
@@ -645,6 +656,7 @@ export default function Groups() {
     setIsFitnessModalOpen(false);
     setFitnessError(null);
     setFitnessProofHash(null);
+    setFitnessVerificationTxHash(null);
   };
 
   const handleJoinCommunity = (communityId: number) => {
@@ -1267,15 +1279,23 @@ export default function Groups() {
 
             <button
               onClick={handleGenerateFitnessProof}
-              disabled={isFitnessLoading || !isConnected}
+              disabled={
+                isFitnessLoading ||
+                !isConnected ||
+                isFitnessVerificationTxSuccess
+              }
               className={`btn w-full mb-4 ${
-                isFitnessLoading || !isConnected
+                isFitnessLoading ||
+                !isConnected ||
+                isFitnessVerificationTxSuccess
                   ? "btn-disabled"
                   : "btn-primary"
               }`}
             >
               {!isConnected
                 ? "Connect Wallet to Continue"
+                : isFitnessVerificationTxSuccess
+                ? "Activities Verified ✓"
                 : isFitnessLoading
                 ? "Generating Proof..."
                 : "Verify Count of Activities"}
@@ -1288,14 +1308,45 @@ export default function Groups() {
             )}
 
             {fitnessProofHash && (
-              <div className="alert alert-success">
+              <div
+                className={`alert ${
+                  isFitnessVerificationTxSuccess
+                    ? "alert-success"
+                    : "alert-info"
+                }`}
+              >
                 <div>
-                  <p className="font-medium text-sm">
-                    Fitness Data Verified Successfully!
-                  </p>
-                  <p className="text-xs mt-1 break-all opacity-70">
-                    Transaction Hash: {fitnessProofHash}
-                  </p>
+                  <div className="flex items-center gap-2">
+                    {!isFitnessVerificationTxSuccess && (
+                      <span className="loading loading-spinner loading-sm"></span>
+                    )}
+                    <p className="font-medium text-sm">
+                      {isFitnessVerificationTxSuccess
+                        ? "Fitness Data Verified Successfully!"
+                        : "Transaction Submitted - Waiting for Confirmation..."}
+                    </p>
+                  </div>
+                  <a
+                    href={`https://eth-sepolia.blockscout.com/tx/${fitnessProofHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs mt-1 opacity-70 hover:opacity-100 underline flex items-center gap-1"
+                  >
+                    View on Explorer
+                    <svg
+                      className="w-3 h-3"
+                      fill="none"
+                      stroke="currentColor"
+                      viewBox="0 0 24 24"
+                    >
+                      <path
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth={2}
+                        d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"
+                      />
+                    </svg>
+                  </a>
                 </div>
               </div>
             )}
