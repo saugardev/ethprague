@@ -2,13 +2,14 @@
 src = "src"
 out = "out"
 libs = ["lib", "dependencies"]
-fs_permissions = [{ access = "read", path = "./testdata"}]
+fs_permissions = [{ access = "read", path = "./testdata"}, { access = "read-write", path = "../ui/.env"}]
+ffi = true
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
 
 # Network configurations
 [rpc_endpoints]
-sepolia = "https://sepolia.drpc.org"
+sepolia = "https://eth-sepolia.g.alchemy.com/v2/2xHHg5ySa-tdYOizIpUMG"
 
 [etherscan]
 sepolia = { key = "8V7XSJCZCSSIVA27MMTH3QXNWUSPCARKNZ" }

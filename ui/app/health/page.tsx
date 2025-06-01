@@ -1,7 +1,12 @@
 "use client";
 
 import Hero from "@/components/hero";
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import {
+  useAccount,
+  useReadContract,
+  useWriteContract,
+  useWaitForTransactionReceipt,
+} from "wagmi";
 import { Abi } from "viem";
 import { sepolia } from "viem/chains";
 import { useState, useEffect } from "react";
@@ -17,6 +22,10 @@ import {
 } from "@vlayer/sdk/web_proof";
 import webProofVerifier from "../../../contracts/out/WebProofVerifier.sol/WebProofVerifier.json";
 import webProofProver from "../../../contracts/out/WebProofProver.sol/WebProofProver.json";
+import {
+  distributeMeritsWithErrorHandling,
+  MERIT_REWARDS,
+} from "../../lib/merits";
 
 const verifierAbi = webProofVerifier.abi as Abi;
 const proverAbi = webProofProver.abi as Abi;
@@ -24,25 +33,40 @@ const proverAbi = webProofProver.abi as Abi;
 export default function Health() {
   const { address, isConnected } = useAccount();
   const [isModalOpen, setIsModalOpen] = useState(false);
-  
+
   // Profile verification states
   const [isProfileLoading, setIsProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState<string | null>(null);
   const [profileProofHash, setProfileProofHash] = useState<string | null>(null);
-  const [profileTxHash, setProfileTxHash] = useState<`0x${string}` | null>(null);
-  
+  const [profileTxHash, setProfileTxHash] = useState<`0x${string}` | null>(
+    null
+  );
+
   // Stress level verification states
   const [isStressLoading, setIsStressLoading] = useState(false);
   const [stressError, setStressError] = useState<string | null>(null);
   const [stressProofHash, setStressProofHash] = useState<string | null>(null);
   const [calendarDate, setCalendarDate] = useState("2025-05-29");
-  const [userDisplayName, setUserDisplayName] = useState("7b0fccd2-7a54-48e4-9133-6f0e72191f01");
+  const [userDisplayName, setUserDisplayName] = useState(
+    "7b0fccd2-7a54-48e4-9133-6f0e72191f01"
+  );
+
+  // Merits distribution states
+  const [meritsMessage, setMeritsMessage] = useState<string | null>(null);
+  const [meritsSuccess, setMeritsSuccess] = useState<boolean>(false);
+  const [isDistributingMerits, setIsDistributingMerits] = useState(false);
+  const [stressTxHash, setStressTxHash] = useState<`0x${string}` | null>(null);
 
   const { writeContract, isPending: isWritePending } = useWriteContract();
 
   // Watch for profile verification transaction confirmation
   const { isSuccess: isProfileTxSuccess } = useWaitForTransactionReceipt({
     hash: profileTxHash || undefined,
+  });
+
+  // Watch for stress verification transaction confirmation
+  const { isSuccess: isStressTxSuccess } = useWaitForTransactionReceipt({
+    hash: stressTxHash || undefined,
   });
 
   const { data: username, refetch: refetchUsername } = useReadContract({
@@ -71,6 +95,50 @@ export default function Health() {
       setProfileTxHash(null); // Reset after successful refetch
     }
   }, [isProfileTxSuccess, profileTxHash, refetchUsername]);
+
+  // Distribute Merits when stress verification is successful
+  useEffect(() => {
+    if (isStressTxSuccess && stressTxHash && address) {
+      handleMeritsDistribution(
+        address,
+        "50.00", // 50 Health Merits for stress verification
+        "Daily Stress Level Verification Reward"
+      );
+      setStressTxHash(null); // Reset after successful distribution
+    }
+  }, [isStressTxSuccess, stressTxHash, address]);
+
+  // Function to handle Merits distribution
+  const handleMeritsDistribution = async (
+    userAddress: string,
+    amount: string,
+    description: string
+  ) => {
+    setIsDistributingMerits(true);
+    setMeritsMessage(null);
+    setMeritsSuccess(false);
+
+    try {
+      const result = await distributeMeritsWithErrorHandling(
+        userAddress,
+        amount,
+        description
+      );
+
+      setMeritsSuccess(result.success);
+      setMeritsMessage(result.message);
+
+      if (result.success && result.data) {
+        console.log("Merits distribution successful:", result.data);
+      }
+    } catch (error) {
+      console.error("Error in Merits distribution:", error);
+      setMeritsSuccess(false);
+      setMeritsMessage("Failed to distribute Merits. Please try again later.");
+    } finally {
+      setIsDistributingMerits(false);
+    }
+  };
 
   const handleGenerateProfileProof = async () => {
     if (!address) {
@@ -231,6 +299,7 @@ export default function Health() {
         {
           onSuccess: (txHash) => {
             setStressProofHash(txHash);
+            setStressTxHash(txHash);
           },
           onError: (error) => {
             setStressError(error.message);
@@ -250,19 +319,21 @@ export default function Health() {
     setProfileProofHash(null);
     setStressError(null);
     setStressProofHash(null);
+    setMeritsMessage(null);
+    setMeritsSuccess(false);
   };
 
   return (
     <>
-      <Hero 
+      <Hero
         title="Verify your health status with data"
         subtitle="Prove you are healthy or document health conditions using verified metrics."
         ctaText="Create Health Proof"
         showCta={true}
       />
-      
+
       <div className="flex mt-10 gap-5 justify-center items-center">
-        <button 
+        <button
           onClick={() => setIsModalOpen(true)}
           className="card image-full dark w-72 h-80 shadow-sm hover:shadow-lg transition-shadow cursor-pointer"
         >
@@ -275,28 +346,37 @@ export default function Health() {
           </figure>
           <div className="card-body">
             <h3 className="card-title text-white">Health Verification</h3>
-            <p className="text-white/80">Create verifiable health proofs using sleep, heart rate, fitness age and more.</p>
+            <p className="text-white/80">
+              Create verifiable health proofs using sleep, heart rate, fitness
+              age and more.
+            </p>
             <div className="card-actions justify-end">
               <div className="btn btn-success btn-soft">Verify Health →</div>
             </div>
           </div>
         </button>
-        
+
         <div className="mt-auto leading-tight flex flex-col gap-5 relative">
           <div className="card bg-base-100 shadow-sm w-72">
             <div className="card-body">
               <h3 className="card-title">Wellness Proof</h3>
-              <p className="text-base-content/70">Demonstrate optimal health with verified metrics from Grass data.</p>
+              <p className="text-base-content/70">
+                Demonstrate optimal health with verified metrics from Grass
+                data.
+              </p>
               <div className="card-actions justify-end">
                 <div className="btn btn-outline btn-sm">Create Proof</div>
               </div>
             </div>
           </div>
-          
+
           <div className="card bg-base-100 shadow-sm w-72">
             <div className="card-body">
               <h3 className="card-title">Medical Documentation</h3>
-              <p className="text-base-content/70">Document health conditions or recovery with timestamped health data.</p>
+              <p className="text-base-content/70">
+                Document health conditions or recovery with timestamped health
+                data.
+              </p>
               <div className="card-actions justify-end">
                 <div className="btn btn-outline btn-sm">Document Health</div>
               </div>
@@ -311,7 +391,7 @@ export default function Health() {
           <div className="modal-box max-w-2xl">
             <div className="flex justify-between items-center mb-6">
               <h3 className="font-bold text-xl">Health Verification</h3>
-              <button 
+              <button
                 className="btn btn-sm btn-circle btn-ghost"
                 onClick={closeModal}
               >
@@ -322,46 +402,90 @@ export default function Health() {
             {/* Step 1: Profile Verification */}
             <div className="mb-8">
               <div className="flex items-center gap-3 mb-4">
-                <div className={`badge ${isProfileVerified ? 'badge-success' : 'badge-warning'}`}>
-                  {isProfileVerified ? '✓' : '1'}
+                <div
+                  className={`badge ${
+                    isProfileVerified ? "badge-success" : "badge-warning"
+                  }`}
+                >
+                  {isProfileVerified ? "✓" : "1"}
                 </div>
                 <h4 className="text-lg font-semibold">
-                  {isProfileVerified ? 'Profile Verified' : 'Verify Garmin Profile'}
+                  {isProfileVerified
+                    ? "Profile Verified"
+                    : "Verify Garmin Profile"}
                 </h4>
               </div>
 
               {isProfileVerified ? (
                 <div className="alert alert-success alert-sm">
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    className="h-4 w-4"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                    stroke="currentColor"
+                  >
+                    <path
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth={2}
+                      d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
+                    />
                   </svg>
-                  <span className="text-sm">Profile verified: <code className="text-xs">{username}</code></span>
+                  <span className="text-sm">
+                    Profile verified:{" "}
+                    <code className="text-xs">{username}</code>
+                  </span>
                 </div>
               ) : (
                 <>
                   <div className="bg-warning/10 border border-warning/20 rounded-lg p-4 mb-4">
                     <div className="flex items-center gap-2 text-warning">
-                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 18.5c-.77.833.192 2.5 1.732 2.5z" />
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        className="h-5 w-5"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke="currentColor"
+                      >
+                        <path
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          strokeWidth={2}
+                          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-2.5L13.732 4c-.77-.833-1.964-.833-2.732 0L4.082 18.5c-.77.833.192 2.5 1.732 2.5z"
+                        />
                       </svg>
-                      <span className="font-medium">Profile verification required</span>
+                      <span className="font-medium">
+                        Profile verification required
+                      </span>
                     </div>
                     <p className="text-sm text-warning/80 mt-1">
-                      You must verify your Garmin profile before generating health proofs.
+                      You must verify your Garmin profile before generating
+                      health proofs.
                     </p>
                   </div>
 
                   <button
                     onClick={handleGenerateProfileProof}
-                    disabled={isProfileLoading || !isConnected || isWritePending}
+                    disabled={
+                      isProfileLoading ||
+                      !isConnected ||
+                      isWritePending ||
+                      !!isProfileVerified
+                    }
                     className={`btn btn-sm ${
-                      isProfileLoading || !isConnected || isWritePending
+                      isProfileLoading ||
+                      !isConnected ||
+                      isWritePending ||
+                      !!isProfileVerified
                         ? "btn-disabled"
                         : "btn-primary"
                     }`}
                   >
                     {!isConnected
                       ? "Connect Wallet to Continue"
+                      : !!isProfileVerified
+                      ? "✓ Profile Already Verified"
                       : isProfileLoading
                       ? "Verifying Profile..."
                       : isWritePending
@@ -378,9 +502,18 @@ export default function Health() {
                   {profileProofHash && (
                     <div className="alert alert-success mt-4">
                       <div>
-                        <p className="font-medium text-sm">Profile verified successfully!</p>
-                        <p className="text-xs mt-1 break-all opacity-70">
-                          Transaction: {profileProofHash}
+                        <p className="font-medium text-sm">
+                          Profile verified successfully!
+                        </p>
+                        <p className="text-xs mt-1">
+                          <a
+                            href={`https://eth-sepolia.blockscout.com/tx/${profileProofHash}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="link link-primary break-all"
+                          >
+                            View transaction on Blockscout →
+                          </a>
                         </p>
                       </div>
                     </div>
@@ -393,20 +526,29 @@ export default function Health() {
             {isProfileVerified && (
               <div className="border-t pt-6">
                 <div className="flex items-center gap-3 mb-4">
-                  <div className={`badge ${stressProofHash ? 'badge-success' : 'badge-primary'}`}>
-                    {stressProofHash ? '✓' : '2'}
+                  <div
+                    className={`badge ${
+                      stressProofHash ? "badge-success" : "badge-primary"
+                    }`}
+                  >
+                    {stressProofHash ? "✓" : "2"}
                   </div>
-                  <h4 className="text-lg font-semibold">Generate Stress Level Proof</h4>
+                  <h4 className="text-lg font-semibold">
+                    Generate Stress Level Proof
+                  </h4>
                 </div>
 
                 <p className="text-sm text-base-content/70 mb-4">
-                  Create a verifiable proof of your daily average stress level from Garmin data.
+                  Create a verifiable proof of your daily average stress level
+                  from Garmin data.
                 </p>
 
                 <div className="grid grid-cols-2 gap-4 mb-4">
                   <div>
                     <label className="label">
-                      <span className="label-text text-sm">User Display Name (UUID):</span>
+                      <span className="label-text text-sm">
+                        User Display Name (UUID):
+                      </span>
                     </label>
                     <input
                       type="text"
@@ -415,7 +557,9 @@ export default function Health() {
                       className="input input-bordered input-sm w-full bg-base-200"
                     />
                     <label className="label">
-                      <span className="label-text-alt text-xs">Auto-populated from your verified profile</span>
+                      <span className="label-text-alt text-xs">
+                        Auto-populated from your verified profile
+                      </span>
                     </label>
                   </div>
 
@@ -438,19 +582,23 @@ export default function Health() {
                     isStressLoading ||
                     !isConnected ||
                     isWritePending ||
-                    !userDisplayName.trim()
+                    !userDisplayName.trim() ||
+                    !!stressProofHash
                   }
                   className={`btn btn-sm w-full ${
                     isStressLoading ||
                     !isConnected ||
                     isWritePending ||
-                    !userDisplayName.trim()
+                    !userDisplayName.trim() ||
+                    !!stressProofHash
                       ? "btn-disabled"
                       : "btn-success"
                   }`}
                 >
                   {!isConnected
                     ? "Connect Wallet to Continue"
+                    : !!stressProofHash
+                    ? "✓ Stress Level Verified"
                     : isStressLoading
                     ? "Generating Stress Level Proof..."
                     : isWritePending
@@ -467,10 +615,58 @@ export default function Health() {
                 {stressProofHash && (
                   <div className="alert alert-success mt-4">
                     <div>
-                      <p className="font-medium text-sm">Stress Level Proof Generated Successfully!</p>
+                      <p className="font-medium text-sm">
+                        Stress Level Proof Generated Successfully!
+                      </p>
+
+                      {/* Merits Distribution Status */}
+                      {(meritsMessage || isDistributingMerits) && (
+                        <div
+                          className={`mt-2 mb-2 p-2 rounded-lg ${
+                            isDistributingMerits
+                              ? "bg-info/10 border border-info/20"
+                              : meritsSuccess
+                              ? "bg-success/10 border border-success/20"
+                              : "bg-warning/10 border border-warning/20"
+                          }`}
+                        >
+                          {isDistributingMerits ? (
+                            <div className="flex items-center gap-2 text-info">
+                              <span className="loading loading-spinner loading-xs"></span>
+                              <span className="text-xs">
+                                Distributing 50 Health Merits...
+                              </span>
+                            </div>
+                          ) : (
+                            <div
+                              className={`flex items-center gap-2 ${
+                                meritsSuccess ? "text-success" : "text-warning"
+                              }`}
+                            >
+                              <span
+                                className={`text-sm ${
+                                  meritsSuccess ? "text-black" : ""
+                                }`}
+                              >
+                                {meritsSuccess
+                                  ? "🏆 +50 Health Merits Earned!"
+                                  : "⚠️ Merit Distribution Issue"}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+
                       <p className="text-sm mt-1">Date: {calendarDate}</p>
-                      <p className="text-xs mt-2 break-all opacity-70">
-                        Transaction: {stressProofHash}
+                      <p className="text-xs mt-2">
+                        <a
+                          href={`https://eth-sepolia.blockscout.com/tx/${stressProofHash}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="link break-all"
+                        >
+                          View transaction on Blockscout →
+                        </a>
                       </p>
                     </div>
                   </div>
@@ -483,9 +679,12 @@ export default function Health() {
               <div className="border-t pt-6 mt-6">
                 <div className="text-center">
                   <div className="text-success text-3xl mb-2">🎉</div>
-                  <h4 className="text-lg font-bold text-success">Health Verification Complete!</h4>
+                  <h4 className="text-lg font-bold text-success">
+                    Health Verification Complete!
+                  </h4>
                   <p className="text-sm text-base-content/70">
-                    You have successfully verified your Garmin profile and generated a stress level proof.
+                    You have successfully verified your Garmin profile and
+                    generated a stress level proof.
                   </p>
                 </div>
               </div>
@@ -496,4 +695,4 @@ export default function Health() {
       )}
     </>
   );
-} 
+}
